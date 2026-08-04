@@ -146,6 +146,10 @@ async function geminiTranscribeOnce(
   const generationConfig: Record<string, unknown> = {
     temperature: 0,
     responseMimeType: "application/json",
+    // Ask for the model's full output budget. The default is a few thousand
+    // tokens, which ends the JSON transcript partway through a long video —
+    // the same truncation the segment caps used to cause, one layer down.
+    maxOutputTokens: 65_536,
   };
   if (lowResolution) {
     // Audio is what matters for transcription; low frame resolution cuts
@@ -234,5 +238,8 @@ function parseGeminiSegments(raw: string): NormalizedTranscriptSegment[] {
       : current.startMs + 5_000;
   }
 
-  return out.slice(0, 500);
+  // No cap here: length is bounded once, after consolidation (MAX_SEGMENTS in
+  // youtube.ts). A 500-segment cap at this stage ended the transcript ~25
+  // minutes into any video that fell back to this path.
+  return out;
 }

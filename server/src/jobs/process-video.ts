@@ -444,8 +444,10 @@ function normalizeSegments(
       endMs: Math.max(1, Math.floor(segment.endMs ?? index * 5000 + 4500)),
       text: segment.text?.trim() ?? "",
     }))
-    .filter((segment) => segment.text && segment.endMs > segment.startMs)
-    .slice(0, 500);
+    // Unbounded on purpose: consolidateSegments applies the pipeline's single
+    // length cap. Capping at 500 here threw away everything past roughly the
+    // first half hour of an uploaded transcript.
+    .filter((segment) => segment.text && segment.endMs > segment.startMs);
 }
 
 async function storeTranscript(

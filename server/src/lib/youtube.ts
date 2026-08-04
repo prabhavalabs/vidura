@@ -50,9 +50,14 @@ export type YouTubeVideoData = {
 
 const youtubeIdPattern = /^[a-zA-Z0-9_-]{11}$/;
 const YTDLP_TIMEOUT_MS = 90_000;
-// Upper bound on cues per video. ASR emits ~2× the cues a manual track does,
-// so 500 truncated long videos a few minutes in; 2000 covers a normal lecture.
-const MAX_SEGMENTS = 2000;
+// Ceiling on FINAL subtitle lines, applied once — in consolidateSegments, to
+// every transcript source. Counting RAW cues instead was a duration limit in
+// disguise: captions arrive at roughly one cue per two seconds of speech, so
+// the old 2000-cue cap cut every video off at ~72 minutes regardless of its
+// length (a 108-minute talk kept 67%, a 3-hour one ~40%) — and did it
+// silently. Consolidation merges ~3-4 cues per line, so this bounds an
+// ~8-hour video, and anything it does trim is logged rather than swallowed.
+const MAX_SEGMENTS = 6000;
 
 // Sentence-consolidation tuning. Raw caption cues are 2–4s phrase fragments
 // that flip too fast to read; merging them into sentence-level lines makes
@@ -131,8 +136,15 @@ export async function fetchYouTubeVideoData(
   if (env.youtubeProxyUrl) {
     try {
       return await fetchViaYtDlp(videoId);
-    } catch {
+    } catch (error) {
       // No caption track, or a yt-dlp/proxy hiccup — fall through to Gemini.
+      // Logged because this fallback silently downgrades timing accuracy, and
+      // a transient proxy failure looks exactly like a video that genuinely
+      // has no captions unless the reason is written down.
+      console.error(
+        `yt-dlp transcript failed for ${videoId}, falling back to Gemini:`,
+        error instanceof Error ? error.message : error,
+      );
     }
   }
 
@@ -260,6 +272,8 @@ function infoToMetadata(info: any, videoId: string): VideoMetadata {
 //   - the next cue starts after a real pause — silence is never bridged, so
 //     quiet stretches in the video stay subtitle-free.
 // Timing stays exact: a merged line spans first cue start → last cue end.
+// This is also the pipeline's ONE length cap (MAX_SEGMENTS), applied here
+// because merged lines are what actually cost translation tokens and DB rows.
 export function consolidateSegments(
   segments: NormalizedTranscriptSegment[],
 ): NormalizedTranscriptSegment[] {
@@ -322,6 +336,17 @@ export function consolidateSegments(
     seg.endMs = Math.min(nextStart, Math.max(seg.endMs, desiredEnd));
   }
 
+  // The single length cap. Logged when it bites: a transcript that stops
+  // before the video does is the one failure users actually notice, so it
+  // must never happen quietly again.
+  if (out.length > MAX_SEGMENTS) {
+    console.warn(
+      `transcript truncated to ${MAX_SEGMENTS} subtitle lines (from ` +
+        `${out.length}) — video exceeds the supported length`,
+    );
+    out.length = MAX_SEGMENTS;
+  }
+
   return out.map((segment, index) => ({ ...segment, index }));
 }
 
@@ -365,10 +390,10 @@ function parseJson3(raw: string): NormalizedTranscriptSegment[] {
     }
   }
 
-  // Re-index after any drops and cap length. The cap bounds translation cost
-  // and DB size; ASR emits ~2× more cues than manual tracks, so keep it high
-  // enough that a normal-length lecture isn't truncated mid-way.
-  return out.slice(0, MAX_SEGMENTS).map((seg, index) => ({ ...seg, index }));
+  // Re-index after any drops. Length is bounded once, after consolidation —
+  // never here, where a count of raw cues is really a limit on how many
+  // minutes of the video survive.
+  return out.map((seg, index) => ({ ...seg, index }));
 }
 
 type YtDlpResult = {

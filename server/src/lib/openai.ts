@@ -12,7 +12,7 @@ import type {
   NormalizedTranscriptSegment,
   VideoMetadata,
 } from "./youtube.ts";
-import type { TranslationResult } from "./translation.ts";
+import { chunkSegments, type TranslationResult } from "./translation.ts";
 
 // A stream that is actively producing tokens must never be killed, no matter
 // how long the full response takes — a fixed total-duration timeout used to
@@ -22,6 +22,14 @@ import type { TranslationResult } from "./translation.ts";
 const STREAM_IDLE_TIMEOUT_MS = 90_000;
 const STREAM_MAX_MS = 20 * 60_000;
 const MAX_ROUNDS = 4;
+// How many lines one request may be asked to translate. The binding limit is
+// the RESPONSE budget, not the context window: each translated line costs
+// ~110 tokens of JSON, so asking for a whole long video at once runs past the
+// model's max output and the stream stops mid-transcript — leaving the tail of
+// a 2h+ video untranslated no matter how complete the transcript is. The full
+// transcript still goes into every call as context, so each window is
+// translated with whole-video understanding; only the ask is windowed.
+const MAX_LINES_PER_CALL = 500;
 
 type ProviderConfig = {
   url: string;
@@ -201,57 +209,69 @@ export async function translateTranscriptOpenAI(input: {
     const missing = input.segments.filter((s) => !byIndex.has(s.index));
     if (missing.length === 0) break;
 
-    const base = byIndex.size;
-    let results: AlignedTranslation[];
-    try {
-      results = await streamTranslationCall({
-        segments: input.segments,
-        targetIndices: missing.map((s) => s.index),
-        metadata: input.metadata,
-        targetLanguage: input.targetLanguage,
-        userGuidance: input.userGuidance,
-        onLine: (count) =>
-          input.onProgress?.(Math.min(base + count, total), total),
-      });
-    } catch (error) {
-      // One garbage or dropped response must not fail the whole attempt —
-      // every earlier round's lines are already persisted, and the next
-      // round re-requests the same missing indices. Give up only when all
-      // rounds pass without producing a single line (checked after loop).
-      console.error(
-        `translate round ${round + 1}/${MAX_ROUNDS} failed:`,
-        error instanceof Error ? error.message : error,
-      );
-      continue;
-    }
+    const roundStart = byIndex.size;
 
-    const fresh: TranslationResult[] = [];
-    let rejected = 0;
-    for (const r of results) {
-      const sourceText = textByIndex.get(r.index);
-      if (sourceText === undefined) continue; // index outside this transcript
-      // Alignment gate: only store a line whose echoed source words match the
-      // line at that index. Drifted lines are dropped and re-requested next
-      // round — a misaligned translation can never reach the database.
-      if (!srcMatchesSegment(r.src, sourceText)) {
-        rejected += 1;
+    // Each round covers ALL remaining lines, in windows small enough to fit
+    // one response. Rounds exist to mop up indices the model dropped or
+    // misaligned — never to page through a long video, which is what left
+    // long transcripts partly untranslated.
+    for (const window of chunkSegments(missing, MAX_LINES_PER_CALL)) {
+      const base = byIndex.size;
+      let results: AlignedTranslation[];
+      try {
+        results = await streamTranslationCall({
+          segments: input.segments,
+          targetIndices: window.map((s) => s.index),
+          metadata: input.metadata,
+          targetLanguage: input.targetLanguage,
+          userGuidance: input.userGuidance,
+          onLine: (count) =>
+            input.onProgress?.(Math.min(base + count, total), total),
+        });
+      } catch (error) {
+        // One garbage or dropped response must not fail the whole attempt —
+        // every earlier window's lines are already persisted, and the next
+        // round re-requests whatever is still missing. Give up only when all
+        // rounds pass without producing a single line (checked after loop).
+        console.error(
+          `translate round ${round + 1}/${MAX_ROUNDS} window ` +
+            `${window[0]?.index}-${window[window.length - 1]?.index} failed:`,
+          error instanceof Error ? error.message : error,
+        );
         continue;
       }
-      if (!byIndex.has(r.index)) {
-        byIndex.set(r.index, r.text);
-        fresh.push({ index: r.index, text: r.text });
-      }
-    }
-    if (rejected > 0) {
-      console.error(
-        `translate round ${round + 1}: rejected ${rejected}/${results.length} misaligned lines`,
-      );
-    }
-    input.onProgress?.(byIndex.size, total);
-    if (fresh.length > 0) await input.onRoundResults?.(fresh);
 
-    // No progress this round — stop rather than loop forever.
-    if (byIndex.size === base) break;
+      const fresh: TranslationResult[] = [];
+      let rejected = 0;
+      for (const r of results) {
+        const sourceText = textByIndex.get(r.index);
+        if (sourceText === undefined) continue; // index outside this transcript
+        // Alignment gate: only store a line whose echoed source words match
+        // the line at that index. Drifted lines are dropped and re-requested
+        // next round — a misaligned translation can never reach the database.
+        if (!srcMatchesSegment(r.src, sourceText)) {
+          rejected += 1;
+          continue;
+        }
+        if (!byIndex.has(r.index)) {
+          byIndex.set(r.index, r.text);
+          fresh.push({ index: r.index, text: r.text });
+        }
+      }
+      if (rejected > 0) {
+        console.error(
+          `translate round ${round + 1}: rejected ${rejected}/${results.length} misaligned lines`,
+        );
+      }
+      input.onProgress?.(byIndex.size, total);
+      // Persist per WINDOW, not per round, so a crash midway through a long
+      // video keeps everything already translated.
+      if (fresh.length > 0) await input.onRoundResults?.(fresh);
+    }
+
+    // A full round that added nothing means retrying won't help — stop rather
+    // than loop forever.
+    if (byIndex.size === roundStart) break;
   }
 
   const out = input.segments
