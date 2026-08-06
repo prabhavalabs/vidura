@@ -20,6 +20,7 @@ import {
   translateTranscriptOpenAI,
   translationModelName,
 } from "../lib/openai.ts";
+import { assertCompleteTranslationCoverage } from "../lib/translation-coverage.ts";
 import { fetchTranslationSettings } from "../lib/translation-settings.ts";
 import {
   assessSubtitleQuality,
@@ -27,6 +28,7 @@ import {
 } from "../lib/subtitle-quality.ts";
 import { sendPushToOwner } from "../lib/push.ts";
 import type { ProcessVideoJobData } from "./boss.ts";
+import { failureState } from "./process-video-state.ts";
 
 type StoredSegment = {
   id: string;
@@ -349,6 +351,19 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
     }
     }
 
+    // Treat the database as the final authority. Provider output is only a
+    // checkpoint until every current transcript index has a persisted,
+    // non-empty translation.
+    const persistedTranslations = await fetchExistingTranslations(
+      videoId,
+      data.targetLanguage,
+    );
+    const coverage = assertCompleteTranslationCoverage(
+      transcriptSegments.map((segment) => segment.index),
+      [...persistedTranslations].map(([index, text]) => ({ index, text })),
+    );
+    translatedCount = coverage.completed;
+
     // Record which model produced the subtitles so the UI can attribute them.
     await sql`
       update videos set metadata = metadata || ${sql.json({
@@ -367,6 +382,8 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
         stage: "ready",
         total_segments: transcriptSegments.length,
         translated_segments: translatedCount,
+        remaining_segments: 0,
+        translation_coverage: 100,
       },
     });
 
@@ -377,13 +394,22 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
       tag: `video-${videoId}`,
     }).catch(() => {});
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Processing failed";
+    let currentProgress = 0;
+    try {
+      const [currentJob] = await sql<Array<{ progress: number }>>`
+        select progress from processing_jobs where id = ${jobId}
+      `;
+      currentProgress = currentJob?.progress ?? 0;
+    } catch {
+      // Preserve the original processing failure if progress lookup also fails.
+    }
+    const failed = failureState(error, currentProgress);
     await updateJob(jobId, videoId, {
       jobStatus: "failed",
       videoStatus: "failed",
-      progress: 100,
-      errorMessage: message,
-      metadata: { stage: "failed", error: message },
+      progress: failed.progress,
+      errorMessage: failed.errorMessage,
+      metadata: failed.metadata,
     });
     throw error;
   }
