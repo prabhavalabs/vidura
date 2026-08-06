@@ -28,9 +28,9 @@ export const env = {
   openRouterApiKey: optional("OPENROUTER_API_KEY"),
   openRouterModel: optional("OPENROUTER_MODEL", "deepseek/deepseek-chat"),
   openRouterChatModel: optional("OPENROUTER_CHAT_MODEL"),
-  // Single-shot streaming translation. Provider selects the model/endpoint;
-  // the logic (one full-transcript call, streamed, with a completeness guard)
-  // is identical either way:
+  // Windowed streaming translation. Provider selects the model/endpoint;
+  // every request retains full-video context and the pipeline enforces complete
+  // persisted coverage before a job may become ready:
   //   "openai"   → api.openai.com, OPENAI_MODEL, strict json_schema
   //   "deepseek" → OpenRouter, OPENROUTER_MODEL, json_object
   translationProvider: optional("TRANSLATION_PROVIDER", "openai"),

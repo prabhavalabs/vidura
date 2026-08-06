@@ -16,6 +16,7 @@ import {
   type TranslationContext,
 } from "../lib/translation.ts";
 import {
+  buildTranslationContextOpenAI,
   singleShotTranslationEnabled,
   translateTranscriptOpenAI,
   translationModelName,
@@ -28,7 +29,10 @@ import {
 } from "../lib/subtitle-quality.ts";
 import { sendPushToOwner } from "../lib/push.ts";
 import type { ProcessVideoJobData } from "./boss.ts";
-import { failureState } from "./process-video-state.ts";
+import {
+  failureState,
+  resolveTranslationContext,
+} from "./process-video-state.ts";
 
 type StoredSegment = {
   id: string;
@@ -205,11 +209,63 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
       (segment) => !existingTranslations.has(segment.index),
     );
     let translatedCount = transcriptSegments.length - untranslated.length;
+    const useSingleShotTranslation = singleShotTranslationEnabled();
+    const translationSettings = useSingleShotTranslation
+      ? await fetchTranslationSettings(data.ownerId)
+      : null;
+    let translationContext: TranslationContext | null = null;
 
-    if (singleShotTranslationEnabled()) {
-      // One structured-output call translates the whole transcript with full
-      // video context, streamed for live progress — far faster than the
-      // batched loop.
+    if (untranslated.length > 0) {
+      const [jobRow] = await sql<Array<{ metadata: Record<string, unknown> }>>`
+        select metadata from processing_jobs where id = ${jobId}
+      `;
+      const jobMetadata = jobRow?.metadata ?? {};
+      translationContext = await resolveTranslationContext({
+        existing: parseTranslationContext(jobMetadata.translation_context),
+        rebuild: Boolean(data.rebuildContext),
+        build: async () => {
+          await updateJob(jobId, videoId, {
+            jobStatus: "running",
+            videoStatus: "translating",
+            progress: translationProgress(
+              translatedCount,
+              transcriptSegments.length,
+            ),
+            metadata: {
+              stage: "building_translation_context",
+              translator: useSingleShotTranslation
+                ? translationModelName()
+                : env.openRouterModel,
+              total_segments: transcriptSegments.length,
+              translated_segments: translatedCount,
+            },
+          });
+          return useSingleShotTranslation
+            ? buildTranslationContextOpenAI({
+              sourceLanguage: data.sourceLanguage,
+              targetLanguage: data.targetLanguage,
+              videoTitle: video.title,
+              channelTitle: video.channel_title,
+              segments: transcriptSegments,
+              userGuidance: translationSettings?.systemPrompt,
+            })
+            : buildTranslationContext({
+              model: env.openRouterModel,
+              sourceLanguage: data.sourceLanguage,
+              targetLanguage: data.targetLanguage,
+              videoTitle: video.title,
+              channelTitle: video.channel_title,
+              segments: transcriptSegments,
+            });
+        },
+        persist: (context) =>
+          mergeJobMetadata(jobId, { translation_context: context }),
+      });
+    }
+
+    if (useSingleShotTranslation) {
+      // Bounded structured-output windows translate the transcript with the
+      // same full-video context and glossary, streamed for live progress.
       await updateJob(jobId, videoId, {
         jobStatus: "running",
         videoStatus: "translating",
@@ -224,12 +280,12 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
 
       const total = transcriptSegments.length;
       let lastProgress = -1;
-      const translationSettings = await fetchTranslationSettings(data.ownerId);
       const results = await translateTranscriptOpenAI({
         segments: transcriptSegments,
         metadata: { title: video.title, channelTitle: video.channel_title },
         targetLanguage: data.targetLanguage,
-        userGuidance: translationSettings.systemPrompt,
+        translationContext: translationContext ?? undefined,
+        userGuidance: translationSettings?.systemPrompt,
         // Resume from lines stored by an earlier attempt of this job instead
         // of re-translating the whole video after a crash or restart.
         seed: existingTranslations,
@@ -276,79 +332,54 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
         data.targetLanguage,
       )).size;
     } else {
-    const [jobRow] = await sql<Array<{ metadata: Record<string, unknown> }>>`
-      select metadata from processing_jobs where id = ${jobId}
-    `;
-    const jobMetadata = jobRow?.metadata ?? {};
-    let context: TranslationContext | null = data.rebuildContext
-      ? null
-      : parseTranslationContext(jobMetadata.translation_context);
+      const translationsByIndex = new Map(existingTranslations);
+      const batches = chunkSegments(untranslated, TRANSLATION_BATCH_SIZE);
 
-    if (!context) {
-      await updateJob(jobId, videoId, {
-        jobStatus: "running",
-        videoStatus: "translating",
-        progress: translationProgress(translatedCount, transcriptSegments.length),
-        metadata: {
-          stage: "building_translation_context",
-          total_segments: transcriptSegments.length,
-          translated_segments: translatedCount,
-        },
-      });
-      context = await buildTranslationContext({
-        model: env.openRouterModel,
-        sourceLanguage: data.sourceLanguage,
-        targetLanguage: data.targetLanguage,
-        videoTitle: video.title,
-        channelTitle: video.channel_title,
-        segments: transcriptSegments,
-      });
-      await mergeJobMetadata(jobId, { translation_context: context });
-    }
+      for (const batch of batches) {
+        const current = batch[0];
+        await updateJob(jobId, videoId, {
+          jobStatus: "running",
+          videoStatus: "translating",
+          progress: translationProgress(
+            translatedCount,
+            transcriptSegments.length,
+          ),
+          metadata: {
+            stage: "translating",
+            total_segments: transcriptSegments.length,
+            translated_segments: translatedCount,
+            remaining_segments: transcriptSegments.length - translatedCount,
+            current_segment_index: current?.index,
+            current_segment_start_ms: current?.startMs,
+            current_segment_text: current?.text,
+          },
+        });
 
-    const translationsByIndex = new Map(existingTranslations);
-    const batches = chunkSegments(untranslated, TRANSLATION_BATCH_SIZE);
+        const batchTranslations = await translateCompleteBatch({
+          model: env.openRouterModel,
+          sourceLanguage: data.sourceLanguage,
+          targetLanguage: data.targetLanguage,
+          segments: batch,
+          allSegments: transcriptSegments,
+          translationContext: translationContext!,
+          videoTitle: video.title,
+          channelTitle: video.channel_title,
+          priorTranslations: buildPriorTranslations(batch, translationsByIndex),
+        });
 
-    for (const batch of batches) {
-      const current = batch[0];
-      await updateJob(jobId, videoId, {
-        jobStatus: "running",
-        videoStatus: "translating",
-        progress: translationProgress(translatedCount, transcriptSegments.length),
-        metadata: {
-          stage: "translating",
-          total_segments: transcriptSegments.length,
-          translated_segments: translatedCount,
-          remaining_segments: transcriptSegments.length - translatedCount,
-          current_segment_index: current?.index,
-          current_segment_start_ms: current?.startMs,
-          current_segment_text: current?.text,
-        },
-      });
+        await storeTranslations(
+          videoId,
+          data.targetLanguage,
+          env.openRouterModel,
+          segmentIdByIndex,
+          batchTranslations,
+        );
 
-      const batchTranslations = await translateCompleteBatch({
-        model: env.openRouterModel,
-        sourceLanguage: data.sourceLanguage,
-        targetLanguage: data.targetLanguage,
-        segments: batch,
-        allSegments: transcriptSegments,
-        translationContext: context,
-        videoTitle: video.title,
-        channelTitle: video.channel_title,
-        priorTranslations: buildPriorTranslations(batch, translationsByIndex),
-      });
-
-      await storeTranslations(
-        videoId,
-        data.targetLanguage,
-        env.openRouterModel,
-        segmentIdByIndex,
-        batchTranslations,
-      );
-
-      for (const t of batchTranslations) translationsByIndex.set(t.index, t.text);
-      translatedCount += batchTranslations.length;
-    }
+        for (const t of batchTranslations) {
+          translationsByIndex.set(t.index, t.text);
+        }
+        translatedCount += batchTranslations.length;
+      }
     }
 
     // Treat the database as the final authority. Provider output is only a
@@ -367,7 +398,7 @@ export async function runProcessVideoJob(data: ProcessVideoJobData) {
     // Record which model produced the subtitles so the UI can attribute them.
     await sql`
       update videos set metadata = metadata || ${sql.json({
-      translation_model: singleShotTranslationEnabled()
+      translation_model: useSingleShotTranslation
         ? translationModelName()
         : env.openRouterModel,
     })}

@@ -1,18 +1,22 @@
 // Sinhala translation via OpenAI structured outputs, streamed for live progress.
 //
-// The whole English transcript (with timestamps, for context and pacing) goes in
-// one request; a strict json_schema returns one clean Sinhala line per index.
-// The response is streamed so we can count completed lines and report granular
-// progress. LLMs occasionally drop indices on long lists, so any missing lines
-// are re-requested (with the full transcript still supplied as context) until
-// every index is covered or a small round cap is hit.
+// The whole English transcript (with timestamps, for context and pacing) and a
+// shared video glossary go into every bounded translation window. A strict
+// json_schema returns one clean Sinhala line per index, streamed for granular
+// progress. Any dropped or misaligned indices are re-requested until every
+// source line is covered or a small round cap is hit.
 
 import { env } from "../env.ts";
 import type {
   NormalizedTranscriptSegment,
   VideoMetadata,
 } from "./youtube.ts";
-import { chunkSegments, type TranslationResult } from "./translation.ts";
+import {
+  chunkSegments,
+  parseTranslationContext,
+  type TranslationContext,
+  type TranslationResult,
+} from "./translation.ts";
 import { assertCompleteTranslationCoverage } from "./translation-coverage.ts";
 import {
   resolveTranslationProviderConfig,
@@ -27,6 +31,8 @@ import {
 const STREAM_IDLE_TIMEOUT_MS = 90_000;
 const STREAM_MAX_MS = 20 * 60_000;
 const MAX_ROUNDS = 4;
+const PRIOR_TRANSLATIONS_FOR_FLOW = 8;
+const OPENAI_TRANSLATION_REASONING_EFFORT = "medium";
 // How many lines one request may be asked to translate. The binding limit is
 // the RESPONSE budget, not the context window: each translated line costs
 // ~110 tokens of JSON, so asking for a whole long video at once runs past the
@@ -123,13 +129,61 @@ function timestamp(ms: number): string {
 // user-editable: per-user preferences are appended AFTER it and may only add
 // to it — they can never replace or override these rules, which encode the
 // application's translation quality tuning.
-function corePrompt(targetLanguage: string): string {
+export function translationLanguageLabel(targetLanguage: string): string {
+  const normalized = targetLanguage.trim().toLowerCase();
+  if (
+    normalized === "si" || normalized === "si-lk" ||
+    normalized === "sinhala" || normalized === "sinhala (sri lanka)"
+  ) {
+    return "Sinhala (Sri Lanka)";
+  }
+  return targetLanguage.trim() || "Sinhala (Sri Lanka)";
+}
+
+const VIDURA_SINHALA_VOICE = [
+  "VIDURA SINHALA VOICE:",
+  "- Write contemporary spoken Sinhala used by an educated Sri Lankan presenter explaining an idea clearly to a learner.",
+  "- Avoid formal literary, legal, administrative, or newspaper-style Sinhala. Avoid mirroring English word order, passive constructions, and idioms.",
+  "- Use familiar Sinhala for ordinary language. Keep an English technical term, brand, abbreviation, or proper noun only when Sri Lankan speakers naturally use it that way; place it smoothly inside the Sinhala sentence.",
+  "- Preserve the speaker's intent and tone. Rephrase freely when a literal translation would sound foreign, stiff, or confusing.",
+  "- Before emitting each line, silently edit it once for native flow, clarity, brevity, and continuity with the surrounding subtitle lines. Output only the final wording.",
+  "NATURALNESS EXAMPLES — follow the phrasing approach, not the subject matter:",
+  "- Let's break down what is happening. → දැන් මේකේ වෙන්නේ මොකක්ද කියලා සරලව බලමු.",
+  "- This is where things get interesting. → මෙතැනින් තමයි කතාව රසවත් වෙන්නේ.",
+  "- Your body is constantly repairing this damage. → ඔබේ ශරීරය මේ හානිය හැම වෙලාවෙම හදාගන්නවා.",
+  "- Autophagy recycles damaged cell components. → Autophagy ක්‍රියාවලියෙන් හානි වූ සෛල කොටස් නැවත භාවිතයට ගන්නවා.",
+  "- The takeaway is simple. → මේකෙන් මතක තියාගන්න ඕන දේ සරලයි.",
+  "- That does not mean aging stops. → ඒකෙන් වයසට යන එක නවතිනවා කියන අදහසක් නෙවෙයි.",
+].join("\n");
+
+function formatTranslationContext(context?: TranslationContext): string {
+  if (!context) {
+    return "VIDEO LOCALIZATION CONTEXT:\nNo precomputed glossary is available; infer terminology consistently from the complete transcript.";
+  }
+  const keyTerms = context.keyTerms.length > 0
+    ? context.keyTerms
+      .map((term) => `- ${term.source} → ${term.preferredSinhala}`)
+      .join("\n")
+    : "- No fixed key terms; choose natural terminology and keep it consistent.";
   return [
-    `You are an expert subtitle localizer translating educational YouTube videos into natural, fluent, spoken ${targetLanguage}.`,
+    "VIDEO LOCALIZATION CONTEXT:",
+    `Topic: ${context.topic}`,
+    `Summary: ${context.summary}`,
+    `Audience: ${context.audience}`,
+    `Video-specific guidance: ${context.translationGuidelines}`,
+    "Terminology decisions (use these exact choices throughout):",
+    keyTerms,
+  ].join("\n");
+}
+
+function corePrompt(targetLanguage: string): string {
+  const language = translationLanguageLabel(targetLanguage);
+  return [
+    `You are an expert subtitle localizer translating educational YouTube videos into natural, fluent, spoken ${language}.`,
     "CONTEXT: you are given the ENTIRE transcript of one video. Read and understand ALL of it before translating anything — resolve ambiguous words, pronouns, and references using the whole video's context and its title. Never translate a line in isolation.",
-    `MEANING OVER WORDS: translate the meaning, not the words. Write idiomatic ${targetLanguage} that a native speaker would actually say while explaining the same idea. Avoid calques, word-for-word renderings, and awkward word order.`,
+    `MEANING OVER WORDS: translate the meaning, not the words. Write idiomatic ${language} that a native speaker would actually say while explaining the same idea. Avoid calques, word-for-word renderings, and awkward word order.`,
     "CONSISTENCY: keep terminology consistent across the entire video — once a term is rendered one way, use the same rendering everywhere.",
-    `MIXED LANGUAGE: when a technical term, brand name, or proper noun has no natural ${targetLanguage} equivalent — or when native speakers commonly say the English word anyway — keep the English word inside the ${targetLanguage} sentence rather than forcing an awkward literal translation. Everyday, non-technical language must still be written in natural ${targetLanguage}.`,
+    `MIXED LANGUAGE: when a technical term, brand name, or proper noun has no natural ${language} equivalent — or when native speakers commonly say the English word anyway — keep the English word inside the ${language} sentence rather than forcing an awkward literal translation. Everyday, non-technical language must still be written in natural ${language}.`,
     "Each line carries one or two complete sentences; translate each line as natural spoken sentences that stand on their own while staying consistent with the surrounding lines. If a sentence spills across lines, let the translation flow naturally across those indices.",
     "SUBTITLE BREVITY: viewers read each line in a few seconds. Keep every line concise; when a literal rendering would be much longer than the original, prefer a shorter natural phrasing with the same meaning.",
   ].join("\n");
@@ -144,8 +198,17 @@ const FORMAT_RULES = [
 
 // Core rules + format contract always apply; the user's saved guidance is
 // appended as ADDITIVE preferences that explicitly lose any conflict.
-function systemPrompt(targetLanguage: string, userGuidance?: string): string {
-  const base = `${corePrompt(targetLanguage)}\n\n${FORMAT_RULES}`;
+function systemPrompt(
+  targetLanguage: string,
+  userGuidance?: string,
+  translationContext?: TranslationContext,
+): string {
+  const base = [
+    corePrompt(targetLanguage),
+    VIDURA_SINHALA_VOICE,
+    formatTranslationContext(translationContext),
+    FORMAT_RULES,
+  ].join("\n\n");
   const extra = userGuidance?.trim();
   if (!extra) return base;
   return `${base}\n\nADDITIONAL USER PREFERENCES — apply these only where they do not conflict with the rules above; when they conflict, the rules above always win:\n${extra}`;
@@ -220,10 +283,151 @@ const RESPONSE_SCHEMA = {
   required: ["translations"],
 };
 
+const TRANSLATION_CONTEXT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    topic: { type: "string" },
+    summary: { type: "string" },
+    audience: { type: "string" },
+    translationGuidelines: { type: "string" },
+    keyTerms: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          source: { type: "string" },
+          preferredSinhala: { type: "string" },
+        },
+        required: ["source", "preferredSinhala"],
+      },
+    },
+  },
+  required: [
+    "topic",
+    "summary",
+    "audience",
+    "translationGuidelines",
+    "keyTerms",
+  ],
+};
+
+export async function buildTranslationContextOpenAI(input: {
+  sourceLanguage: string;
+  targetLanguage: string;
+  videoTitle: string | null;
+  channelTitle: string | null;
+  segments: NormalizedTranscriptSegment[];
+  userGuidance?: string;
+}): Promise<TranslationContext> {
+  const provider = resolveProvider();
+  const language = translationLanguageLabel(input.targetLanguage);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${provider.apiKey}`,
+  };
+  if (provider.openrouter) {
+    headers["HTTP-Referer"] = "https://vidura.nipuntheekshana.com";
+    headers["X-Title"] = "Vidura";
+  }
+
+  const system = [
+    `You are the senior localization editor for Vidura, preparing one reusable video-level guide for natural spoken ${language} subtitles.`,
+    "Read the complete transcript before deciding the topic, audience, voice, or terminology.",
+    "Choose terminology that educated Sri Lankan speakers naturally use. Keep established English technical terms when that is more natural than a forced Sinhala coinage.",
+    "Make the guidance concise, specific to this video, and useful across separate subtitle translation windows. Return only the required JSON object.",
+  ].join("\n");
+  const user = {
+    task:
+      "Create the shared localization context and terminology decisions that every translation window must follow.",
+    sourceLanguage: input.sourceLanguage,
+    targetLanguage: language,
+    videoTitle: input.videoTitle,
+    channelTitle: input.channelTitle,
+    additionalUserPreferences: input.userGuidance?.trim() || undefined,
+    transcript: input.segments.map((segment) => ({
+      index: segment.index,
+      text: segment.text,
+    })),
+    requirements: [
+      "Summarize the complete video arc, not just its opening.",
+      "Describe a contemporary spoken Sri Lankan educational register and the speaker's tone.",
+      "Explicitly reject literal English word order, stiff literary Sinhala, and unnecessary transliteration.",
+      "Select only recurring or meaning-critical key terms; give each one a natural, consistent Sinhala or mixed Sinhala-English rendering.",
+      "Keep subtitle phrasing concise and easy to read while preserving meaning.",
+    ],
+  };
+
+  const maxTokens = 8_000;
+  const res = await fetch(provider.url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: provider.model,
+      stream: false,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(user) },
+      ],
+      response_format: provider.jsonSchema
+        ? {
+          type: "json_schema",
+          json_schema: {
+            name: "video_translation_context",
+            strict: true,
+            schema: TRANSLATION_CONTEXT_SCHEMA,
+          },
+        }
+        : { type: "json_object" },
+      ...(provider.openrouter
+        ? { max_tokens: maxTokens }
+        : {
+          max_completion_tokens: maxTokens,
+          reasoning_effort: OPENAI_TRANSLATION_REASONING_EFFORT,
+        }),
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `OpenAI translation context failed with ${res.status}: ${detail.slice(0, 400)}`,
+    );
+  }
+  const payload = await res.json() as any;
+  if (payload?.error) {
+    throw new Error(
+      `OpenAI translation context failed: ${payload.error.message ?? "unknown provider error"}`,
+    );
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("OpenAI translation context response did not include JSON");
+  }
+  const jsonText = content
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    throw new Error("OpenAI translation context response was not valid JSON");
+  }
+  const context = parseTranslationContext(parsed);
+  if (!context) {
+    throw new Error("OpenAI translation context response was incomplete");
+  }
+  return context;
+}
+
 export async function translateTranscriptOpenAI(input: {
   segments: NormalizedTranscriptSegment[];
   metadata: Pick<VideoMetadata, "title" | "channelTitle">;
   targetLanguage: string;
+  translationContext?: TranslationContext;
   // Optional per-user preferences, appended AFTER the immutable core prompt.
   userGuidance?: string;
   // Lines already translated (e.g. stored by an earlier attempt of the same
@@ -255,6 +459,12 @@ export async function translateTranscriptOpenAI(input: {
     // long transcripts partly untranslated.
     for (const window of chunkSegments(missing, MAX_LINES_PER_CALL)) {
       const base = byIndex.size;
+      const firstWindowIndex = window[0]?.index ?? 0;
+      const priorTranslations = Array.from(byIndex.entries())
+        .filter(([index]) => index < firstWindowIndex)
+        .sort(([left], [right]) => left - right)
+        .slice(-PRIOR_TRANSLATIONS_FOR_FLOW)
+        .map(([index, text]) => ({ index, text }));
       let results: AlignedTranslation[];
       try {
         results = await streamTranslationCall({
@@ -262,6 +472,8 @@ export async function translateTranscriptOpenAI(input: {
           targetIndices: window.map((s) => s.index),
           metadata: input.metadata,
           targetLanguage: input.targetLanguage,
+          translationContext: input.translationContext,
+          priorTranslations,
           userGuidance: input.userGuidance,
           onLine: (count) =>
             input.onProgress?.(Math.min(base + count, total), total),
@@ -326,16 +538,20 @@ async function streamTranslationCall(input: {
   targetIndices: number[];
   metadata: Pick<VideoMetadata, "title" | "channelTitle">;
   targetLanguage: string;
+  translationContext?: TranslationContext;
+  priorTranslations: Array<{ index: number; text: string }>;
   userGuidance?: string;
   onLine: (count: number) => void;
 }): Promise<AlignedTranslation[]> {
   const user = {
     videoTitle: input.metadata.title,
     channelTitle: input.metadata.channelTitle,
-    targetLanguage: input.targetLanguage,
+    targetLanguage: translationLanguageLabel(input.targetLanguage),
+    videoContext: input.translationContext,
     instruction:
-      "Translate every transcript line whose index is in translateIndices into natural spoken Sinhala. Return exactly one entry per requested index.",
+      "Translate every transcript line whose index is in translateIndices into natural spoken Sinhala. Make the first requested line continue naturally from priorSinhalaTranslations when they are present. Return exactly one entry per requested index.",
     translateIndices: input.targetIndices,
+    priorSinhalaTranslations: input.priorTranslations,
     transcript: input.segments.map((s) => ({
       index: s.index,
       time: timestamp(s.startMs),
@@ -377,7 +593,11 @@ async function streamTranslationCall(input: {
         messages: [
           {
             role: "system",
-            content: systemPrompt(input.targetLanguage, input.userGuidance),
+            content: systemPrompt(
+              input.targetLanguage,
+              input.userGuidance,
+              input.translationContext,
+            ),
           },
           { role: "user", content: JSON.stringify(user) },
         ],
@@ -397,7 +617,7 @@ async function streamTranslationCall(input: {
           ? { max_tokens: maxTokens }
           : {
             max_completion_tokens: maxTokens,
-            reasoning_effort: "low",
+            reasoning_effort: OPENAI_TRANSLATION_REASONING_EFFORT,
           }),
       }),
       signal: controller.signal,

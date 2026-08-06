@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { IncompleteTranslationError } from "../lib/translation-coverage.ts";
-import { failureState } from "./process-video-state.ts";
+import {
+  failureState,
+  resolveTranslationContext,
+} from "./process-video-state.ts";
 
 describe("failureState", () => {
   test("preserves incomplete translation counts below 100 percent", () => {
@@ -42,5 +45,58 @@ describe("failureState", () => {
 
   test("normalizes invalid current progress", () => {
     expect(failureState("unknown failure", Number.NaN).progress).toBe(0);
+  });
+});
+
+describe("resolveTranslationContext", () => {
+  test("builds and persists a reusable context when job metadata has none", async () => {
+    const expected = {
+      topic: "Cell repair",
+      summary: "How cells repair themselves.",
+      audience: "Sri Lankan learners",
+      translationGuidelines: "Use natural spoken Sinhala.",
+      keyTerms: [{ source: "DNA", preferredSinhala: "DNA" }],
+    };
+    let persisted: unknown = null;
+
+    const result = await resolveTranslationContext({
+      existing: null,
+      rebuild: false,
+      build: async () => expected,
+      persist: async (context: unknown) => {
+        persisted = context;
+      },
+    });
+
+    expect(result).toEqual(expected);
+    expect(persisted).toEqual(expected);
+  });
+
+  test("reuses a valid persisted context without another provider call", async () => {
+    const existing = {
+      topic: "Existing topic",
+      summary: "Existing summary",
+      audience: "Existing audience",
+      translationGuidelines: "Existing guidance",
+      keyTerms: [],
+    };
+    let builds = 0;
+    let persists = 0;
+
+    const result = await resolveTranslationContext({
+      existing,
+      rebuild: false,
+      build: async () => {
+        builds += 1;
+        return { ...existing, topic: "Replacement" };
+      },
+      persist: async () => {
+        persists += 1;
+      },
+    });
+
+    expect(result).toEqual(existing);
+    expect(builds).toBe(0);
+    expect(persists).toBe(0);
   });
 });

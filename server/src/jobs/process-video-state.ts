@@ -1,3 +1,6 @@
+import type { TranslationContext } from "../lib/translation.ts";
+import { IncompleteTranslationError } from "../lib/translation-coverage.ts";
+
 export type ProcessVideoFailureState = {
   progress: number;
   errorMessage: string;
@@ -38,4 +41,16 @@ export function failureState(
     metadata: { stage: "failed", error: errorMessage },
   };
 }
-import { IncompleteTranslationError } from "../lib/translation-coverage.ts";
+
+export async function resolveTranslationContext(input: {
+  existing: TranslationContext | null;
+  rebuild: boolean;
+  build: () => Promise<TranslationContext>;
+  persist: (context: TranslationContext) => Promise<void>;
+}): Promise<TranslationContext> {
+  if (!input.rebuild && input.existing) return input.existing;
+
+  const context = await input.build();
+  await input.persist(context);
+  return context;
+}
