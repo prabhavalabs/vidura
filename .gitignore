@@ -5,6 +5,7 @@
 .vscode
 .devcontainer
 node_modules/
+.worktrees/
 .bun/
 __pycache__
 .pytest_cache
