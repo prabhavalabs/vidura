@@ -8,14 +8,23 @@ const boss = await getBoss();
 
 await boss.createQueue(PROCESS_VIDEO_QUEUE);
 
+// batchSize MUST stay 1. pg-boss hands the handler an array and marks EVERY
+// job in the fetched batch complete once the handler resolves — so fetching 2
+// while only ever running the first silently completed the second without
+// running it, stranding that video at 0% forever. One job per fetch makes
+// that impossible, and each job keeps its own expiration window rather than
+// sharing one with whatever it was batched beside.
 await boss.work<ProcessVideoJobData>(
   PROCESS_VIDEO_QUEUE,
-  { batchSize: 2 },
-  async ([job]) => {
-    if (!job) return;
-    console.log(`process-video: job ${job.data.jobId} started`);
-    await runProcessVideoJob(job.data);
-    console.log(`process-video: job ${job.data.jobId} done`);
+  { batchSize: 1 },
+  async (jobs) => {
+    // Still loop: the contract is an array, so nothing is dropped even if the
+    // fetch size is ever raised again.
+    for (const job of jobs) {
+      console.log(`process-video: job ${job.data.jobId} started`);
+      await runProcessVideoJob(job.data);
+      console.log(`process-video: job ${job.data.jobId} done`);
+    }
   },
 );
 
