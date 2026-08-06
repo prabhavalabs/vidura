@@ -145,6 +145,7 @@ const VIDURA_SINHALA_VOICE = [
   "- Write contemporary spoken Sinhala used by an educated Sri Lankan presenter explaining an idea clearly to a learner.",
   "- Avoid formal literary, legal, administrative, or newspaper-style Sinhala. Avoid mirroring English word order, passive constructions, and idioms.",
   "- Use familiar Sinhala for ordinary language. Keep an English technical term, brand, abbreviation, or proper noun only when Sri Lankan speakers naturally use it that way; place it smoothly inside the Sinhala sentence.",
+  "- Do not duplicate the same term as a Sinhala transliteration plus English in parentheses. Choose the one form a Sri Lankan presenter would naturally write; for example, use NASA rather than නාසා (NASA).",
   "- Preserve the speaker's intent and tone. Rephrase freely when a literal translation would sound foreign, stiff, or confusing.",
   "- Before emitting each line, silently edit it once for native flow, clarity, brevity, and continuity with the surrounding subtitle lines. Output only the final wording.",
   "NATURALNESS EXAMPLES — follow the phrasing approach, not the subject matter:",
@@ -355,6 +356,7 @@ export async function buildTranslationContextOpenAI(input: {
       "Describe a contemporary spoken Sri Lankan educational register and the speaker's tone.",
       "Explicitly reject literal English word order, stiff literary Sinhala, and unnecessary transliteration.",
       "Select only recurring or meaning-critical key terms; give each one a natural, consistent Sinhala or mixed Sinhala-English rendering.",
+      "Choose one natural written form per key term; never pair a Sinhala transliteration with the same English term in parentheses.",
       "Keep subtitle phrasing concise and easy to read while preserving meaning.",
     ],
   };

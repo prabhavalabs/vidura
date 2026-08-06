@@ -137,6 +137,9 @@ describe("translateTranscriptOpenAI", () => {
       expect(system).toContain("VIDURA SINHALA VOICE");
       expect(system).toContain("Autophagy → Autophagy");
       expect(system).toContain(
+        "Do not duplicate the same term as a Sinhala transliteration plus English in parentheses",
+      );
+      expect(system).toContain(
         "The takeaway is simple. → මේකෙන් මතක තියාගන්න ඕන දේ සරලයි.",
       );
 
@@ -262,6 +265,9 @@ describe("buildTranslationContextOpenAI", () => {
       expect(request?.messages[0].content).toContain("Sinhala (Sri Lanka)");
       const user = JSON.parse(request?.messages[1].content);
       expect(user.targetLanguage).toBe("Sinhala (Sri Lanka)");
+      expect(user.requirements).toContain(
+        "Choose one natural written form per key term; never pair a Sinhala transliteration with the same English term in parentheses.",
+      );
       expect(user.transcript).toEqual([{
         index: 0,
         text: "Autophagy recycles damaged cell components and limits DNA damage.",
