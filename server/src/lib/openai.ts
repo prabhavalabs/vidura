@@ -13,6 +13,7 @@ import type {
   VideoMetadata,
 } from "./youtube.ts";
 import { chunkSegments, type TranslationResult } from "./translation.ts";
+import { assertCompleteTranslationCoverage } from "./translation-coverage.ts";
 import {
   resolveTranslationProviderConfig,
   type TranslationProviderConfig,
@@ -33,7 +34,59 @@ const MAX_ROUNDS = 4;
 // a 2h+ video untranslated no matter how complete the transcript is. The full
 // transcript still goes into every call as context, so each window is
 // translated with whole-video understanding; only the ask is windowed.
-const MAX_LINES_PER_CALL = 500;
+const MAX_LINES_PER_CALL = 100;
+
+export type TranslationStreamPayload = {
+  content: string | null;
+  finishReason: string | null;
+  responseId: string | null;
+  model: string | null;
+};
+
+export function parseTranslationStreamPayload(
+  payload: string,
+): TranslationStreamPayload | null {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  if (parsed?.error) {
+    const message = typeof parsed.error.message === "string"
+      ? parsed.error.message
+      : "unknown provider error";
+    const code = typeof parsed.error.code === "string" && parsed.error.code
+      ? ` (${parsed.error.code})`
+      : "";
+    throw new Error(`OpenAI stream error: ${message}${code}`);
+  }
+
+  const choice = parsed?.choices?.[0];
+  return {
+    content: typeof choice?.delta?.content === "string"
+      ? choice.delta.content
+      : null,
+    finishReason: typeof choice?.finish_reason === "string"
+      ? choice.finish_reason
+      : null,
+    responseId: typeof parsed?.id === "string" ? parsed.id : null,
+    model: typeof parsed?.model === "string" ? parsed.model : null,
+  };
+}
+
+export function finalizeTranslationResults(
+  sourceIndices: number[],
+  byIndex: ReadonlyMap<number, string>,
+): TranslationResult[] {
+  const results = sourceIndices.flatMap((index) => {
+    const text = byIndex.get(index)?.trim();
+    return text ? [{ index, text }] : [];
+  });
+  assertCompleteTranslationCoverage(sourceIndices, results);
+  return results;
+}
 
 // Resolves the translation endpoint from TRANSLATION_PROVIDER. Both providers
 // speak the OpenAI chat-completions API, so the streaming logic is shared.
@@ -254,19 +307,18 @@ export async function translateTranscriptOpenAI(input: {
       if (fresh.length > 0) await input.onRoundResults?.(fresh);
     }
 
-    // A full round that added nothing means retrying won't help — stop rather
-    // than loop forever.
-    if (byIndex.size === roundStart) break;
+    if (byIndex.size === roundStart) {
+      console.error(
+        `translate round ${round + 1}/${MAX_ROUNDS} made no progress; ` +
+          `${missing.length} segments still missing`,
+      );
+    }
   }
 
-  const out = input.segments
-    .filter((s) => byIndex.has(s.index))
-    .map((s) => ({ index: s.index, text: byIndex.get(s.index)! }));
-
-  if (out.length === 0) {
-    throw new Error("OpenAI translation returned no usable lines");
-  }
-  return out;
+  return finalizeTranslationResults(
+    input.segments.map((segment) => segment.index),
+    byIndex,
+  );
 }
 
 async function streamTranslationCall(input: {
@@ -343,7 +395,10 @@ async function streamTranslationCall(input: {
         // max_completion_tokens; OpenRouter accepts max_tokens.
         ...(provider.openrouter
           ? { max_tokens: maxTokens }
-          : { max_completion_tokens: maxTokens }),
+          : {
+            max_completion_tokens: maxTokens,
+            reasoning_effort: "low",
+          }),
       }),
       signal: controller.signal,
     });
@@ -359,6 +414,9 @@ async function streamTranslationCall(input: {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = "";
+    let finishReason: string | null = null;
+    let responseId: string | null = null;
+    let responseModel: string | null = null;
 
     try {
       while (true) {
@@ -377,21 +435,32 @@ async function streamTranslationCall(input: {
           if (!trimmed.startsWith("data:")) continue;
           const payload = trimmed.slice(5).trim();
           if (!payload || payload === "[DONE]") continue;
-          let delta: string | undefined;
-          try {
-            delta = JSON.parse(payload)?.choices?.[0]?.delta?.content;
-          } catch {
-            continue;
-          }
-          if (typeof delta !== "string" || delta.length === 0) continue;
-          content += delta;
+          const event = parseTranslationStreamPayload(payload);
+          if (!event) continue;
+          responseId = event.responseId ?? responseId;
+          responseModel = event.model ?? responseModel;
+          finishReason = event.finishReason ?? finishReason;
+          if (!event.content) continue;
+          content += event.content;
           const before = counter.count;
-          counter.feed(delta);
+          counter.feed(event.content);
           if (counter.count !== before) input.onLine(counter.count);
         }
       }
     } finally {
       reader.releaseLock();
+    }
+
+    if (finishReason && finishReason !== "stop") {
+      console.error(
+        "translation stream ended before normal completion",
+        {
+          finishReason,
+          responseId,
+          responseModel,
+          receivedCharacters: content.length,
+        },
+      );
     }
   } catch (error) {
     // A dropped/idle-aborted stream isn't a total loss: whatever complete
