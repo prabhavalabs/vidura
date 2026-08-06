@@ -24,7 +24,7 @@ export type TranscriptSegment = {
   startMs?: number;
   endMs?: number;
   original: string;
-  sinhala: string;
+  sinhala: string | null;
 };
 
 export type ChatMessage = {

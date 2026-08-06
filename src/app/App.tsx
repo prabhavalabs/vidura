@@ -145,6 +145,7 @@ import {
   type LibraryVideo,
 } from "@/features/videos/api";
 import { useVideoRealtime } from "@/features/videos/use-video-realtime";
+import { translationCoveragePercent } from "@/features/videos/translation-coverage";
 import {
   languageOptions,
   quickPrompts,
@@ -498,7 +499,10 @@ function SubtitleProvenanceBadges({ video }: { video: LibraryVideo }) {
   const quality = video.subtitleQuality;
   const source = video.transcriptSource ?? quality?.source ?? null;
   const model = translationModelLabel(video.translationModel);
-  if (!source && !quality && !model) return null;
+  const translationCoverage = translationCoveragePercent(
+    video.latestJob?.metadata ?? {},
+  );
+  if (!source && !quality && !model && translationCoverage === null) return null;
 
   const base =
     "inline-flex items-center gap-1.5 rounded-md border-2 border-foreground px-2 py-0.5 text-xs font-bold text-foreground";
@@ -524,6 +528,13 @@ function SubtitleProvenanceBadges({ video }: { video: LibraryVideo }) {
         ? ` · covers ${Math.round(quality.metrics.coverageRatio * 100)}% of the video`
         : "")
     : undefined;
+  const totalSegments = Number(video.latestJob?.metadata.total_segments ?? 0);
+  const translatedSegments = Number(
+    video.latestJob?.metadata.translated_segments ?? 0,
+  );
+  const translationTitle = translationCoverage === null
+    ? undefined
+    : `${translatedSegments} of ${totalSegments} subtitle lines translated`;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -546,7 +557,19 @@ function SubtitleProvenanceBadges({ video }: { video: LibraryVideo }) {
       {quality ? (
         <span className={cn(base, qualityTone)} title={qualityTitle}>
           <BadgeCheckIcon className="size-3.5" />
-          Sync {quality.score}%
+          Timing {quality.score}%
+        </span>
+      ) : null}
+      {translationCoverage !== null ? (
+        <span
+          className={cn(
+            base,
+            translationCoverage === 100 ? "bg-vidura-mint" : "bg-vidura-sun",
+          )}
+          title={translationTitle}
+        >
+          <BadgeCheckIcon className="size-3.5" />
+          Translation {translationCoverage}%
         </span>
       ) : null}
       {model ? (
@@ -2620,11 +2643,15 @@ const TranscriptRows = memo(function TranscriptRows({
                 <>
                   <span>{segment.original}</span>
                   <span className="mt-1 block text-foreground/65">
-                    {segment.sinhala}
+                    {segment.sinhala ?? "Translation unavailable"}
                   </span>
                 </>
               ) : (
-                segment.sinhala
+                segment.sinhala ?? (
+                  <span className="text-foreground/50">
+                    Translation unavailable
+                  </span>
+                )
               )}
             </span>
           </button>

@@ -3,8 +3,8 @@ import { sql } from "../db.ts";
 import { type AppEnv, requireUser } from "../middleware/auth.ts";
 import { parseYouTubeUrl } from "../lib/youtube.ts";
 import { enqueueProcessVideo } from "../jobs/boss.ts";
-import { formatTimestamp } from "../lib/chat.ts";
 import { fetchTranslationSettings } from "../lib/translation-settings.ts";
+import { buildSubtitleResponse } from "../lib/subtitle-response.ts";
 
 export const videos = new Hono<AppEnv>();
 videos.use("*", requireUser);
@@ -115,16 +115,7 @@ videos.get("/:id/transcript", async (c) => {
     select segment_id, text from translated_segments
     where video_id = ${videoId} and language_code = ${video.target_language}
   `;
-  const sinhalaBySegment = new Map(translations.map((t) => [t.segment_id, t.text]));
-
-  return c.json(segments.map((segment) => ({
-    id: segment.id,
-    time: formatTimestamp(segment.start_ms),
-    startMs: segment.start_ms,
-    endMs: segment.end_ms,
-    original: segment.text,
-    sinhala: sinhalaBySegment.get(segment.id) ?? segment.text,
-  })));
+  return c.json(buildSubtitleResponse(segments, translations));
 });
 
 // POST /api/videos — create/refresh a video and enqueue processing.
