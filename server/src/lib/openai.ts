@@ -13,6 +13,10 @@ import type {
   VideoMetadata,
 } from "./youtube.ts";
 import { chunkSegments, type TranslationResult } from "./translation.ts";
+import {
+  resolveTranslationProviderConfig,
+  type TranslationProviderConfig,
+} from "./translation-provider.ts";
 
 // A stream that is actively producing tokens must never be killed, no matter
 // how long the full response takes — a fixed total-duration timeout used to
@@ -31,44 +35,25 @@ const MAX_ROUNDS = 4;
 // translated with whole-video understanding; only the ask is windowed.
 const MAX_LINES_PER_CALL = 500;
 
-type ProviderConfig = {
-  url: string;
-  apiKey: string;
-  model: string;
-  jsonSchema: boolean;
-  openrouter: boolean;
-};
-
 // Resolves the translation endpoint from TRANSLATION_PROVIDER. Both providers
 // speak the OpenAI chat-completions API, so the streaming logic is shared.
-function resolveProvider(): ProviderConfig | null {
-  if (env.translationProvider === "openai") {
-    if (!env.openaiApiKey) return null;
-    return {
-      url: "https://api.openai.com/v1/chat/completions",
-      apiKey: env.openaiApiKey,
-      model: env.openaiModel,
-      jsonSchema: true,
-      openrouter: false,
-    };
-  }
-  // "deepseek" (or anything else) → DeepSeek via OpenRouter.
-  if (!env.openRouterApiKey) return null;
-  return {
-    url: "https://openrouter.ai/api/v1/chat/completions",
-    apiKey: env.openRouterApiKey,
-    model: env.openRouterModel,
-    jsonSchema: false, // OpenRouter/DeepSeek: json_object is the safe mode.
-    openrouter: true,
-  };
+function resolveProvider(): TranslationProviderConfig {
+  return resolveTranslationProviderConfig({
+    provider: env.translationProvider,
+    openaiApiKey: env.openaiApiKey,
+    openaiModel: env.openaiModel,
+    openRouterApiKey: env.openRouterApiKey,
+    openRouterModel: env.openRouterModel,
+  });
 }
 
 export function singleShotTranslationEnabled(): boolean {
-  return resolveProvider() !== null;
+  resolveProvider();
+  return true;
 }
 
 export function translationModelName(): string {
-  return resolveProvider()?.model ?? "unknown";
+  return resolveProvider().model;
 }
 
 function timestamp(ms: number): string {
@@ -198,7 +183,7 @@ export async function translateTranscriptOpenAI(input: {
   // persist partial progress — a crash or restart then loses at most a round.
   onRoundResults?: (results: TranslationResult[]) => Promise<void>;
 }): Promise<TranslationResult[]> {
-  if (!resolveProvider()) throw new Error("No translation provider configured");
+  resolveProvider();
   const total = input.segments.length;
   if (total === 0) return [];
 
