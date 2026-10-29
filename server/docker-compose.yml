@@ -15,7 +15,12 @@ services:
     environment:
       DATABASE_URL: postgres://vidura:${POSTGRES_PASSWORD}@${DB_HOST:-platform-postgres}:5432/vidura
       PORT: "8787"
-    networks: [default, platform]
+    networks:
+      # Keep the project network as the default route, so published ports and outbound traffic
+      # use it rather than the shared platform network.
+      default:
+        gw_priority: 1
+      platform: {}
     ports:
       - "127.0.0.1:8788:8787"
 
@@ -25,7 +30,12 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://vidura:${POSTGRES_PASSWORD}@${DB_HOST:-platform-postgres}:5432/vidura
-    networks: [default, platform]
+    networks:
+      # Keep the project network as the default route, so published ports and outbound traffic
+      # use it rather than the shared platform network.
+      default:
+        gw_priority: 1
+      platform: {}
     command: ["bun", "run", "src/worker.ts"]
 
 networks:
