@@ -1,36 +1,21 @@
-# Vidura self-hosted backend. Postgres stays on the internal network (no host
-# port → no clash with the box's other Postgres instances); the API is exposed
-# only on 127.0.0.1:8788 for the host nginx to reverse-proxy.
+# Vidura self-hosted backend. The database lives on the host's shared Postgres
+# (platform-postgres on the external "platform" network, backed up nightly with
+# every other app on the box); the API is exposed only on 127.0.0.1:8788 for the
+# host nginx to reverse-proxy.
+#
+# A new database needs db/better-auth.sql then db/schema.sql applied once, as the
+# vidura role, before the first start (the bundled Postgres used to run them as
+# init scripts on an empty volume).
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: vidura
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: vidura
-    volumes:
-      - vidura-pgdata:/var/lib/postgresql/data
-      # Applied in filename order on first init (empty volume) only.
-      - ./db/better-auth.sql:/docker-entrypoint-initdb.d/00-better-auth.sql:ro
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vidura -d vidura"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   api:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://vidura:${POSTGRES_PASSWORD}@postgres:5432/vidura
+      DATABASE_URL: postgres://vidura:${POSTGRES_PASSWORD}@${DB_HOST:-platform-postgres}:5432/vidura
       PORT: "8787"
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [default, platform]
     ports:
       - "127.0.0.1:8788:8787"
 
@@ -39,11 +24,11 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://vidura:${POSTGRES_PASSWORD}@postgres:5432/vidura
-    depends_on:
-      postgres:
-        condition: service_healthy
+      DATABASE_URL: postgres://vidura:${POSTGRES_PASSWORD}@${DB_HOST:-platform-postgres}:5432/vidura
+    networks: [default, platform]
     command: ["bun", "run", "src/worker.ts"]
 
-volumes:
-  vidura-pgdata:
+networks:
+  platform:
+    name: ${PLATFORM_NETWORK:-platform}
+    external: true
