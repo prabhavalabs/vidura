@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Vidura">
+  <rect width="512" height="512" rx="72" fill="#fff8e7"/>
+  <path d="M86 363h340v56H86z" fill="#ffd96a" stroke="#16120f" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M145 125h222c32 0 58 26 58 58v130c0 32-26 58-58 58H145c-32 0-58-26-58-58V183c0-32 26-58 58-58Z" fill="#aaf0c9" stroke="#16120f" stroke-width="16"/>
+  <path d="M216 205v86l78-43-78-43Z" fill="#ff735f" stroke="#16120f" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M166 94 137 58M346 94l29-36M256 86V40" stroke="#16120f" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="166" cy="274" r="16" fill="#16120f"/>
+  <circle cx="346" cy="274" r="16" fill="#16120f"/>
+</svg>
+
