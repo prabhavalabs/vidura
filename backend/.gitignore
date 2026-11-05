@@ -1,0 +1,11 @@
+# Built admin portal, copied in before `go build`; only the placeholder is tracked.
+/internal/webui/admin/*
+!/internal/webui/admin/.gitkeep
+
+# Local data and binaries
+/data/
+/bin/
+*.db
+*.db-shm
+*.db-wal
+.env
