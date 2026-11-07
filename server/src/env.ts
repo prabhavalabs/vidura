@@ -16,6 +16,14 @@ function optional(name: string, fallback = ""): string {
 export const env = {
   databaseUrl: required("DATABASE_URL"),
   apiBaseUrl: optional("API_BASE_URL", "http://localhost:8787"),
+  // Extra public hosts this API answers on, comma-separated (e.g.
+  // "vidura-api.prabhavalabs.com"). Sign-in then uses the host each request
+  // arrived on, so Google returns the user to the same API host that holds
+  // the sign-in cookie. API_BASE_URL stays the fallback.
+  apiExtraHosts: optional("API_EXTRA_HOSTS")
+    .split(",")
+    .map((host) => host.trim())
+    .filter(Boolean),
   // Comma-separated list of frontend origins allowed to use this API,
   // e.g. "https://vidura.nipuntheekshana.com,https://vidura.prabhavalabs.com".
   webOrigins: optional("WEB_ORIGIN", "http://localhost:5173")
