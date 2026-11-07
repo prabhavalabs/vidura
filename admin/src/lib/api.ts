@@ -1,6 +1,23 @@
-// Same-origin API client. Session cookies go along automatically, and every
-// state-changing request carries the browser's Origin header, which the
-// server checks.
+// API client. The API lives on its own host (VIDURA_API_URL); the portal
+// calls it cross-origin with the session cookie. The server only accepts
+// writes whose Origin header is this portal's address.
+
+/**
+ * The API's origin. In development it comes from VITE_API_URL; a production
+ * build reads the <meta name="vidura-api-url"> the server fills in, so one
+ * build works for every deployment.
+ */
+function resolveApiUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_URL as string | undefined
+  if (fromEnv) return fromEnv.replace(/\/$/, "")
+  const meta = document
+    .querySelector<HTMLMetaElement>('meta[name="vidura-api-url"]')
+    ?.content.trim()
+  if (meta && !meta.startsWith("__")) return meta.replace(/\/$/, "")
+  return window.location.origin
+}
+
+export const apiUrl = resolveApiUrl()
 
 export class ApiError extends Error {
   readonly status: number
@@ -21,9 +38,9 @@ async function request<T>(
   path: string,
   body?: unknown
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl + path, {
     method,
-    credentials: "same-origin",
+    credentials: "include",
     headers:
       body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

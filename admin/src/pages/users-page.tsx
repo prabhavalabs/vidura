@@ -14,7 +14,12 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { DataTable, SortableHeader } from "@/components/data-table"
+import {
+  DataTable,
+  facetFilter,
+  SortableHeader,
+  useTableUrl,
+} from "@/components/data-table"
 import { Page } from "@/components/site-header"
 import {
   AlertDialog,
@@ -482,11 +487,13 @@ function useUserColumns(
       },
       {
         accessorKey: "role",
+        filterFn: facetFilter,
         header: ({ column }) => <SortableHeader column={column} title="Role" />,
         cell: ({ row }) => <RoleBadge user={row.original} />,
       },
       {
         accessorKey: "status",
+        filterFn: facetFilter,
         header: ({ column }) => (
           <SortableHeader column={column} title="Status" />
         ),
@@ -634,6 +641,8 @@ function useInviteColumns(
 // --- page -------------------------------------------------------------------
 
 export function UsersPage() {
+  const url = useTableUrl()
+  const tab = url.get("tab") === "invites" ? "invites" : "users"
   const me = useMe()
   const users = useUsers()
   const invites = useInvites()
@@ -663,7 +672,13 @@ export function UsersPage() {
       description="Everyone who can sign in to Vidura. Invite family members by their Google email address."
       actions={inviteButton}
     >
-      <Tabs defaultValue="users" className="gap-4">
+      <Tabs
+        value={tab}
+        onValueChange={(value) =>
+          url.update({ tab: value === "users" ? null : value })
+        }
+        className="gap-3"
+      >
         <TabsList>
           <TabsTrigger value="users">
             <UsersIcon />
@@ -692,6 +707,26 @@ export function UsersPage() {
               columns={userColumns}
               data={users.data ?? []}
               loading={users.isPending}
+              urlPrefix="u."
+              getRowId={(user) => user.id}
+              facets={[
+                {
+                  column: "role",
+                  title: "Role",
+                  options: [
+                    { value: "superuser", label: "Superuser" },
+                    { value: "member", label: "Member" },
+                  ],
+                },
+                {
+                  column: "status",
+                  title: "Status",
+                  options: [
+                    { value: "active", label: "Active" },
+                    { value: "disabled", label: "Disabled" },
+                  ],
+                },
+              ]}
               searchPlaceholder="Search name or email…"
               empty={
                 <NoRows
@@ -715,6 +750,7 @@ export function UsersPage() {
               columns={inviteColumns}
               data={invites.data ?? []}
               loading={invites.isPending}
+              urlPrefix="i."
               searchPlaceholder="Search invites…"
               empty={
                 <NoRows

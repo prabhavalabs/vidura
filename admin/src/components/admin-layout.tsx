@@ -31,7 +31,7 @@ export function AdminLayout() {
   }
 
   if (me.error instanceof ApiError && me.error.status === 401) {
-    const next = `/admin${location.pathname === "/" ? "" : location.pathname}${location.search}`
+    const next = `${location.pathname}${location.search}`
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />
   }
 
@@ -90,7 +90,7 @@ export function AdminLayout() {
   return (
     <SidebarProvider>
       <AppSidebar user={me.data} />
-      <SidebarInset>
+      <SidebarInset className="min-w-0">
         <Outlet />
       </SidebarInset>
     </SidebarProvider>

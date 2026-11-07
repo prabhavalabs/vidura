@@ -30,7 +30,7 @@ export function RouteError() {
           <EmptyDescription>{message}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          <Button onClick={() => window.location.assign("/admin/")}>
+          <Button onClick={() => window.location.assign("/")}>
             Back to the dashboard
           </Button>
         </EmptyContent>

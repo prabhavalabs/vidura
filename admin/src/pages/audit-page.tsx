@@ -1,11 +1,9 @@
-import * as React from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ScrollTextIcon } from "lucide-react"
 
-import { DataTable } from "@/components/data-table"
+import { DataTable, useTableUrl } from "@/components/data-table"
 import { Page } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   Empty,
   EmptyDescription,
@@ -14,15 +12,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Spinner } from "@/components/ui/spinner"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -30,10 +19,8 @@ import {
 import { errorMessage } from "@/lib/api"
 import { auditActionOptions, describeAction } from "@/lib/audit-actions"
 import { formatDateTime, timeAgo } from "@/lib/format"
-import { useAuditLog } from "@/lib/queries"
+import { useAuditPage } from "@/lib/queries"
 import type { AuditEntry } from "@/lib/types"
-
-const ALL = "all"
 
 function formatDetail(detail: AuditEntry["detail"]): string {
   if (!detail) return ""
@@ -95,7 +82,10 @@ const columns: ColumnDef<AuditEntry>[] = [
     accessorFn: (entry) => formatDetail(entry.detail),
     header: "Details",
     cell: ({ getValue }) => (
-      <span className="text-xs text-muted-foreground">
+      <span
+        className="block max-w-md truncate text-xs text-muted-foreground"
+        title={(getValue() as string) || undefined}
+      >
         {(getValue() as string) || "—"}
       </span>
     ),
@@ -112,36 +102,15 @@ const columns: ColumnDef<AuditEntry>[] = [
 ]
 
 export function AuditPage() {
-  const [action, setAction] = React.useState(ALL)
-  const log = useAuditLog(action === ALL ? "" : action)
-  const entries = React.useMemo(
-    () => log.data?.pages.flatMap((page) => page.entries) ?? [],
-    [log.data]
-  )
-
-  const filter = (
-    <Select value={action} onValueChange={setAction}>
-      <SelectTrigger className="w-48" aria-label="Filter by action">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          <SelectItem value={ALL}>All actions</SelectItem>
-          {auditActionOptions.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
-  )
+  const url = useTableUrl()
+  const actions = url.values("action")
+  const log = useAuditPage(url.page, actions)
 
   return (
     <Page
       crumbs={[{ label: "Access" }, { label: "Audit log" }]}
       title="Audit log"
-      description="Every sign-in, refused sign-in and account change, newest first. Entries can’t be edited."
+      description="Every sign-in, account change, connection and pipeline action, newest first. Entries can’t be edited."
     >
       {log.isError ? (
         <Empty className="border">
@@ -151,41 +120,30 @@ export function AuditPage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        <>
-          <DataTable
-            columns={columns}
-            data={entries}
-            loading={log.isPending}
-            pageSize={1000}
-            searchPlaceholder="Search loaded entries…"
-            toolbar={filter}
-            empty={
-              <Empty className="border-0">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <ScrollTextIcon />
-                  </EmptyMedia>
-                  <EmptyTitle>No entries</EmptyTitle>
-                  <EmptyDescription>
-                    Nothing has been recorded for this filter yet.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            }
-          />
-          {log.hasNextPage && (
-            <div className="flex justify-center">
-              <Button
-                variant="outline"
-                onClick={() => log.fetchNextPage()}
-                disabled={log.isFetchingNextPage}
-              >
-                {log.isFetchingNextPage && <Spinner />}
-                Load older entries
-              </Button>
-            </div>
-          )}
-        </>
+        <DataTable
+          columns={columns}
+          data={log.data?.entries ?? []}
+          loading={log.isPending}
+          manual={{ rowCount: log.data?.total ?? 0 }}
+          noSearch
+          getRowId={(entry) => entry.id}
+          facets={[
+            { column: "action", title: "Action", options: auditActionOptions },
+          ]}
+          empty={
+            <Empty className="border-0">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <ScrollTextIcon />
+                </EmptyMedia>
+                <EmptyTitle>No entries</EmptyTitle>
+                <EmptyDescription>
+                  Nothing has been recorded yet.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          }
+        />
       )}
     </Page>
   )
