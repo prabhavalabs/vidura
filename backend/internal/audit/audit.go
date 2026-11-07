@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prabhavalabs/vidura/backend/internal/db"
@@ -17,10 +18,29 @@ const (
 	SignIn        = "auth.signin"
 	SignInRefused = "auth.signin_refused"
 	SignOut       = "auth.signout"
+	PasswordSet   = "auth.password_set"
 	UserUpdated   = "user.updated"
 	UserDeleted   = "user.deleted"
 	InviteCreated = "invite.created"
 	InviteDeleted = "invite.deleted"
+
+	AIConnectStarted = "ai.connect_started"
+	AIConnected      = "ai.connected"
+	AIConnectFailed  = "ai.connect_failed"
+	AIDisconnected   = "ai.disconnected"
+
+	DevicePairingCode = "device.pairing_code"
+	DevicePaired      = "device.paired"
+	DevicePairRefused = "device.pair_refused"
+	DeviceRevoked     = "device.revoked"
+	SettingsUpdated   = "settings.updated"
+
+	DeviceEngineInstall = "device.engine_install"
+
+	VideoAdded   = "video.added"
+	VideoDeleted = "video.deleted"
+	JobRequested = "job.requested"
+	JobCancelled = "job.cancelled"
 )
 
 // Entry is one audit record.
@@ -72,6 +92,58 @@ func (l *Log) Record(ctx context.Context, entry Entry) {
 type Page struct {
 	Entries    []Entry
 	NextCursor string
+	// Total is set by ListPage: every matching entry, for page numbers.
+	Total int
+}
+
+// ListPage returns page number page (from 1) of size entries, newest first,
+// with the total number of matching entries. actions, when not empty, keeps
+// only those actions.
+func (l *Log) ListPage(ctx context.Context, page, size int, actions []string) (Page, error) {
+	if size <= 0 || size > 100 {
+		size = 15
+	}
+	if page < 1 {
+		page = 1
+	}
+	where, args := "", []any{}
+	if len(actions) > 0 {
+		where = "WHERE action IN (" + strings.TrimSuffix(strings.Repeat("?,", len(actions)), ",") + ")"
+		for _, action := range actions {
+			args = append(args, action)
+		}
+	}
+	var out Page
+	if err := l.db.QueryRowContext(ctx, `SELECT count(*) FROM audit_log `+where, args...).Scan(&out.Total); err != nil {
+		return Page{}, err
+	}
+	rows, err := l.db.QueryContext(ctx, `
+		SELECT id, at, coalesce(actor_id, ''), actor_email, action, target, detail, ip
+		FROM audit_log `+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
+	if err != nil {
+		return Page{}, err
+	}
+	defer rows.Close()
+	out.Entries, err = scanEntries(rows)
+	return out, err
+}
+
+func scanEntries(rows *sql.Rows) ([]Entry, error) {
+	entries := []Entry{}
+	for rows.Next() {
+		var (
+			entry  Entry
+			at     string
+			detail string
+		)
+		if err := rows.Scan(&entry.ID, &at, &entry.ActorID, &entry.ActorEmail, &entry.Action, &entry.Target, &detail, &entry.IP); err != nil {
+			return nil, err
+		}
+		entry.At, _ = db.ParseTime(at)
+		_ = json.Unmarshal([]byte(detail), &entry.Detail)
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
 }
 
 // List returns up to limit entries older than cursor (an entry id), newest

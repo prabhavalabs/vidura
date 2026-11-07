@@ -110,14 +110,14 @@ func TestDisabledMemberCannotSignInOrUseSessions(t *testing.T) {
 	ctx := context.Background()
 	owner := f.owner(t)
 	member := f.member(t, "m-sub", "family@example.com")
-	token, _, err := f.store.CreateSession(ctx, member.ID, SessionMeta{})
+	token, _, err := f.store.CreateSession(ctx, member.ID, SessionMeta{App: "admin"})
 	require.NoError(t, err)
 
 	disabled := StatusDisabled
 	_, err = f.store.UpdateUser(ctx, owner, member.ID, UserUpdate{Status: &disabled})
 	require.NoError(t, err)
 
-	_, _, err = f.store.SessionUser(ctx, token)
+	_, _, err = f.store.SessionUser(ctx, token, "admin")
 	assert.ErrorIs(t, err, ErrNotFound, "disabling deletes the user's sessions")
 
 	_, err = f.store.SignIn(ctx, identity("m-sub", "family@example.com"))
@@ -155,13 +155,13 @@ func TestDeleteUserRemovesInviteAndSessions(t *testing.T) {
 	ctx := context.Background()
 	owner := f.owner(t)
 	member := f.member(t, "m-sub", "family@example.com")
-	token, _, err := f.store.CreateSession(ctx, member.ID, SessionMeta{})
+	token, _, err := f.store.CreateSession(ctx, member.ID, SessionMeta{App: "admin"})
 	require.NoError(t, err)
 
 	_, err = f.store.DeleteUser(ctx, owner, member.ID)
 	require.NoError(t, err)
 
-	_, _, err = f.store.SessionUser(ctx, token)
+	_, _, err = f.store.SessionUser(ctx, token, "admin")
 	assert.ErrorIs(t, err, ErrNotFound)
 	_, err = f.store.SignIn(ctx, identity("m-sub", "family@example.com"))
 	assert.ErrorIs(t, err, ErrNotAllowed)
@@ -171,26 +171,26 @@ func TestSessionsExpireAndSlide(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	owner := f.owner(t)
-	token, expires, err := f.store.CreateSession(ctx, owner.ID, SessionMeta{UserAgent: "test"})
+	token, expires, err := f.store.CreateSession(ctx, owner.ID, SessionMeta{App: "admin", UserAgent: "test"})
 	require.NoError(t, err)
 	assert.Equal(t, f.now.Add(SessionTTL), expires)
 
-	_, renewed, err := f.store.SessionUser(ctx, token)
+	_, renewed, err := f.store.SessionUser(ctx, token, "admin")
 	require.NoError(t, err)
 	assert.True(t, renewed.IsZero(), "no refresh within the first day")
 
 	f.now = f.now.Add(2 * 24 * time.Hour)
-	user, renewed, err := f.store.SessionUser(ctx, token)
+	user, renewed, err := f.store.SessionUser(ctx, token, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, owner.ID, user.ID)
 	assert.Equal(t, f.now.Add(SessionTTL), renewed)
 	require.NotNil(t, user.LastSeenAt)
 
 	f.now = f.now.Add(SessionTTL + time.Minute)
-	_, _, err = f.store.SessionUser(ctx, token)
+	_, _, err = f.store.SessionUser(ctx, token, "admin")
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	_, _, err = f.store.SessionUser(ctx, "not-a-token")
+	_, _, err = f.store.SessionUser(ctx, "not-a-token", "admin")
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -230,4 +230,26 @@ func TestInvitesValidateAndReportAcceptance(t *testing.T) {
 
 	_, err = f.store.DeleteInvite(ctx, "missing@example.com")
 	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestSessionsBelongToOnePortal(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	owner := f.owner(t)
+
+	client, _, err := f.store.CreateSession(ctx, owner.ID, SessionMeta{App: "client"})
+	require.NoError(t, err)
+	_, _, err = f.store.SessionUser(ctx, client, "admin")
+	assert.ErrorIs(t, err, ErrNotFound, "a client-portal session never opens the admin portal")
+	got, _, err := f.store.SessionUser(ctx, client, "client")
+	require.NoError(t, err)
+	assert.Equal(t, owner.ID, got.ID)
+
+	admin, _, err := f.store.CreateSession(ctx, owner.ID, SessionMeta{App: "admin"})
+	require.NoError(t, err)
+	_, _, err = f.store.SessionUser(ctx, admin, "client")
+	assert.ErrorIs(t, err, ErrNotFound, "nor the other way round")
+
+	_, _, err = f.store.CreateSession(ctx, owner.ID, SessionMeta{})
+	assert.Error(t, err, "every session names its portal")
 }

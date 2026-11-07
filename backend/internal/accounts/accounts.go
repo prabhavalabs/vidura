@@ -49,18 +49,38 @@ var (
 
 // User is an account.
 type User struct {
-	ID         string
-	Email      string
-	Name       string
-	ImageURL   string
-	Role       string
-	Status     string
+	ID       string
+	Email    string
+	Name     string
+	ImageURL string
+	Role     string
+	Status   string
+	// Locale is the language the user reads Vidura in: "en" or "si".
+	Locale     string
 	CreatedAt  time.Time
 	LastSeenAt *time.Time
 	// Owner is true for configured superuser emails, which can't be changed
 	// from the admin portal.
 	Owner bool
 }
+
+// Locales are the languages Vidura speaks.
+var Locales = map[string]bool{"en": true, "si": true}
+
+// SetLocale changes the language a user reads Vidura in.
+func (s *Store) SetLocale(ctx context.Context, userID, locale string) (User, error) {
+	if !Locales[locale] {
+		return User{}, ErrInvalidLocale
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE users SET locale = ?, updated_at = ? WHERE id = ?`,
+		locale, db.FormatTime(s.now()), userID); err != nil {
+		return User{}, err
+	}
+	return s.GetUser(ctx, userID)
+}
+
+// ErrInvalidLocale is returned for a language Vidura doesn't speak.
+var ErrInvalidLocale = errors.New("unknown language")
 
 // IsSuperuser reports whether the user may use the admin portal.
 func (u User) IsSuperuser() bool { return u.Role == RoleSuperuser }
@@ -89,7 +109,7 @@ func NewStore(database *sql.DB, cfg *config.Config) *Store {
 // SetClock replaces the clock (tests).
 func (s *Store) SetClock(now func() time.Time) { s.now = now }
 
-const userColumns = `id, email, name, coalesce(image_url, ''), role, status, created_at, last_seen_at`
+const userColumns = `id, email, name, coalesce(image_url, ''), role, status, locale, created_at, last_seen_at`
 
 func (s *Store) scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var (
@@ -97,7 +117,7 @@ func (s *Store) scanUser(row interface{ Scan(...any) error }) (User, error) {
 		createdAt string
 		lastSeen  sql.NullString
 	)
-	if err := row.Scan(&user.ID, &user.Email, &user.Name, &user.ImageURL, &user.Role, &user.Status, &createdAt, &lastSeen); err != nil {
+	if err := row.Scan(&user.ID, &user.Email, &user.Name, &user.ImageURL, &user.Role, &user.Status, &user.Locale, &createdAt, &lastSeen); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrNotFound
 		}
@@ -222,8 +242,10 @@ func (s *Store) DevSignIn(ctx context.Context, email string) (User, error) {
 
 // --- Sessions -------------------------------------------------------------
 
-// SessionMeta describes where a session was created.
+// SessionMeta describes where a session was created. App is the portal it
+// belongs to ("admin" or "client"); the session only works from there.
 type SessionMeta struct {
+	App       string
 	UserAgent string
 	IP        string
 }
@@ -231,6 +253,9 @@ type SessionMeta struct {
 // CreateSession issues a new session token for userID. Only the token's hash
 // is stored; the token itself goes into the cookie and nowhere else.
 func (s *Store) CreateSession(ctx context.Context, userID string, meta SessionMeta) (string, time.Time, error) {
+	if meta.App != "admin" && meta.App != "client" {
+		return "", time.Time{}, fmt.Errorf("session for unknown portal %q", meta.App)
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", time.Time{}, err
@@ -239,9 +264,9 @@ func (s *Store) CreateSession(ctx context.Context, userID string, meta SessionMe
 	now := s.now()
 	expires := now.Add(SessionTTL)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_used_at, user_agent, ip)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		hashToken(token), userID, db.FormatTime(now), db.FormatTime(expires), db.FormatTime(now),
+		INSERT INTO sessions (token_hash, user_id, app, created_at, expires_at, last_used_at, user_agent, ip)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hashToken(token), userID, meta.App, db.FormatTime(now), db.FormatTime(expires), db.FormatTime(now),
 		truncate(meta.UserAgent, 300), truncate(meta.IP, 64))
 	if err != nil {
 		return "", time.Time{}, err
@@ -249,19 +274,20 @@ func (s *Store) CreateSession(ctx context.Context, userID string, meta SessionMe
 	return token, expires, nil
 }
 
-// SessionUser resolves a session token to its active user. When the session
+// SessionUser resolves a session token of portal app to its active user. A
+// session made by the other portal is treated as unknown. When the session
 // was last extended more than a day ago it is extended again, and the new
 // expiry is returned so the caller can refresh the cookie; otherwise the
 // returned time is zero.
-func (s *Store) SessionUser(ctx context.Context, token string) (User, time.Time, error) {
-	if token == "" {
+func (s *Store) SessionUser(ctx context.Context, token, app string) (User, time.Time, error) {
+	if token == "" || app == "" {
 		return User{}, time.Time{}, ErrNotFound
 	}
 	hash := hashToken(token)
 	var expiresAt, lastUsedAt string
 	var userID string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT user_id, expires_at, last_used_at FROM sessions WHERE token_hash = ?`, hash,
+		`SELECT user_id, expires_at, last_used_at FROM sessions WHERE token_hash = ? AND app = ?`, hash, app,
 	).Scan(&userID, &expiresAt, &lastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, time.Time{}, ErrNotFound
@@ -342,7 +368,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserSummary, error) {
 			lastSeen  sql.NullString
 		)
 		if err := rows.Scan(&summary.ID, &summary.Email, &summary.Name, &summary.ImageURL, &summary.Role,
-			&summary.Status, &createdAt, &lastSeen, &summary.ActiveSessions); err != nil {
+			&summary.Status, &summary.Locale, &createdAt, &lastSeen, &summary.ActiveSessions); err != nil {
 			return nil, err
 		}
 		summary.CreatedAt, _ = db.ParseTime(createdAt)
