@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS app_settings;
+DROP TABLE IF EXISTS pairing_codes;
+DROP TABLE IF EXISTS devices;
