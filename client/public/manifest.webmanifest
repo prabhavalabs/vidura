@@ -1,0 +1,61 @@
+{
+  "id": "/",
+  "name": "Vidura",
+  "short_name": "Vidura",
+  "description": "YouTube videos with Sinhala subtitles, study notes and a tutor to ask.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#fafafa",
+  "theme_color": "#fafafa",
+  "categories": ["education", "entertainment"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-monochrome-512.png", "sizes": "512x512", "type": "image/png", "purpose": "monochrome" },
+    { "src": "/vidura-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshot-wide.png",
+      "sizes": "1280x800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Your videos, ready to watch with Sinhala subtitles"
+    },
+    {
+      "src": "/screenshot-narrow.png",
+      "sizes": "780x1688",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Vidura on a phone"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add a video",
+      "short_name": "Add video",
+      "url": "/add",
+      "icons": [{ "src": "/shortcut-add-96.png", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "Ask a question",
+      "short_name": "Ask",
+      "url": "/ask",
+      "icons": [{ "src": "/shortcut-ask-96.png", "sizes": "96x96", "type": "image/png" }]
+    }
+  ],
+  "share_target": {
+    "action": "/add",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  },
+  "launch_handler": { "client_mode": ["navigate-existing", "auto"] }
+}
