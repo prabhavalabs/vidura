@@ -3,13 +3,11 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
-// The Go server serves this app under /admin/ and the API on the same
-// origin. In development, Vite proxies API and auth calls to it, so cookies
-// and Origin checks behave exactly as in production.
-const backend = process.env.VIDURA_BACKEND ?? "http://localhost:8790"
-
+// The admin portal has its own host (admin-vidura.…) and calls the API on
+// another (api-vidura.…). Set VITE_API_URL for development; production builds
+// read the API address from a <meta> tag the server fills in.
 export default defineConfig({
-  base: "/admin/",
+  base: "/",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -17,12 +15,8 @@ export default defineConfig({
     },
   },
   server: {
+    host: "127.0.0.1",
     port: 5174,
     strictPort: true,
-    proxy: {
-      "/admin/api": { target: backend },
-      "/api": { target: backend },
-      "/auth": { target: backend },
-    },
   },
 })

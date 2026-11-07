@@ -13,6 +13,10 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 
 export type Crumb = { label: string; to?: string }
 
+/**
+ * The bar at the top of every page: the app mark, a "Vidura / Section / Page"
+ * trail that doubles as the page title, and the page's controls on the right.
+ */
 export function SiteHeader({
   crumbs,
   actions,
@@ -21,45 +25,58 @@ export function SiteHeader({
   actions?: React.ReactNode
 }) {
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-      <div className="flex w-full items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mr-2 data-[orientation=vertical]:h-4"
-        />
-        <Breadcrumb>
-          <BreadcrumbList>
-            {crumbs.map((crumb, index) => {
-              const last = index === crumbs.length - 1
-              return (
-                <span key={`${crumb.label}-${index}`} className="contents">
-                  <BreadcrumbItem
-                    className={last ? undefined : "hidden md:block"}
-                  >
-                    {last || !crumb.to ? (
-                      <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
-                    ) : (
-                      <BreadcrumbLink asChild>
-                        <Link to={crumb.to}>{crumb.label}</Link>
-                      </BreadcrumbLink>
-                    )}
-                  </BreadcrumbItem>
-                  {!last && <BreadcrumbSeparator className="hidden md:block" />}
-                </span>
-              )
-            })}
-          </BreadcrumbList>
-        </Breadcrumb>
-        {actions && (
-          <div className="ml-auto flex items-center gap-2">{actions}</div>
-        )}
-      </div>
+    <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2.5 border-b bg-background/85 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/70 md:px-5">
+      <SidebarTrigger className="-ml-1" />
+      <Separator
+        orientation="vertical"
+        className="data-[orientation=vertical]:h-5"
+      />
+      <Breadcrumb className="min-w-0">
+        <BreadcrumbList className="flex-nowrap text-sm sm:text-[15px]">
+          <BreadcrumbItem className="hidden sm:inline-flex">
+            <BreadcrumbLink asChild>
+              <Link to="/">Vidura</Link>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+          {crumbs.map((crumb, index) => {
+            const last = index === crumbs.length - 1
+            return (
+              <span key={`${crumb.label}-${index}`} className="contents">
+                <BreadcrumbSeparator
+                  className={
+                    index === 0 ? "hidden sm:block" : "hidden md:block"
+                  }
+                >
+                  /
+                </BreadcrumbSeparator>
+                <BreadcrumbItem
+                  className={last ? "min-w-0" : "hidden md:inline-flex"}
+                >
+                  {last || !crumb.to ? (
+                    <BreadcrumbPage className="truncate font-medium">
+                      {crumb.label}
+                    </BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbLink asChild>
+                      <Link to={crumb.to}>{crumb.label}</Link>
+                    </BreadcrumbLink>
+                  )}
+                </BreadcrumbItem>
+              </span>
+            )
+          })}
+        </BreadcrumbList>
+      </Breadcrumb>
+      {actions && (
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {actions}
+        </div>
+      )}
     </header>
   )
 }
 
-/** Standard page body: header, then padded content. */
+/** Standard page body: the header, an optional intro line, then content. */
 export function Page({
   crumbs,
   actions,
@@ -69,27 +86,23 @@ export function Page({
 }: {
   crumbs: Crumb[]
   actions?: React.ReactNode
+  /** Announced to screen readers; the breadcrumb is the visible title. */
   title: string
-  description?: string
+  description?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <>
-      <SiteHeader crumbs={crumbs} />
-      <main className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-            {description && (
-              <p className="text-sm text-muted-foreground">{description}</p>
-            )}
-          </div>
-          {actions && (
-            <div className="flex flex-wrap items-center gap-2">{actions}</div>
-          )}
-        </div>
+      <SiteHeader crumbs={crumbs} actions={actions} />
+      <div className="mx-auto flex w-full max-w-[1440px] min-w-0 flex-1 flex-col gap-3 p-3 md:gap-4 md:p-5 [&>*]:shrink-0">
+        <h1 className="sr-only">{title}</h1>
+        {description && (
+          <p className="-mb-1 max-w-3xl text-[13px] text-muted-foreground">
+            {description}
+          </p>
+        )}
         {children}
-      </main>
+      </div>
     </>
   )
 }

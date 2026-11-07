@@ -1,5 +1,12 @@
 import * as React from "react"
-import { LayoutDashboardIcon, ScrollTextIcon, UsersIcon } from "lucide-react"
+import {
+  ActivityIcon,
+  FilmIcon,
+  LayoutDashboardIcon,
+  ScrollTextIcon,
+  Settings2Icon,
+  UsersIcon,
+} from "lucide-react"
 import { Link } from "react-router"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -14,7 +21,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { useOverview } from "@/lib/queries"
+import { useOverview, useStats } from "@/lib/queries"
 import type { User } from "@/lib/types"
 
 export function AppSidebar({
@@ -22,10 +29,27 @@ export function AppSidebar({
   ...props
 }: React.ComponentProps<typeof Sidebar> & { user: User }) {
   const overview = useOverview()
+  const stats = useStats()
   const pendingInvites = overview.data?.accounts.pendingInvites ?? 0
+  const failedVideos = stats.data?.totals.failed ?? 0
 
-  const overviewItems: NavItem[] = [
-    { title: "Dashboard", url: "/", icon: <LayoutDashboardIcon />, end: true },
+  const libraryItems: NavItem[] = [
+    { title: "Overview", url: "/", icon: <LayoutDashboardIcon />, end: true },
+    {
+      title: "Videos",
+      url: "/videos",
+      icon: <FilmIcon />,
+      badge: stats.data ? stats.data.totals.videos : undefined,
+    },
+    {
+      title: "Processing",
+      url: "/processing",
+      icon: <ActivityIcon />,
+      badge:
+        failedVideos > 0 ? (
+          <span className="text-failure">{failedVideos}</span>
+        ) : undefined,
+    },
   ]
   const accessItems: NavItem[] = [
     {
@@ -36,6 +60,9 @@ export function AppSidebar({
     },
     { title: "Audit log", url: "/audit", icon: <ScrollTextIcon /> },
   ]
+  const systemItems: NavItem[] = [
+    { title: "Settings", url: "/settings", icon: <Settings2Icon /> },
+  ]
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -44,8 +71,8 @@ export function AppSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link to="/">
-                <div className="flex aspect-square size-8 items-center justify-center overflow-hidden rounded-lg">
-                  <img src="/admin/vidura-icon.svg" alt="" className="size-8" />
+                <div className="flex aspect-square size-8 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-b from-success to-success/70 shadow-sm">
+                  <img src="/vidura-icon.svg" alt="" className="size-8" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold">Vidura</span>
@@ -59,8 +86,9 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain label="Overview" items={overviewItems} />
+        <NavMain label="Library" items={libraryItems} />
         <NavMain label="Access" items={accessItems} />
+        <NavMain label="System" items={systemItems} />
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={user} />
