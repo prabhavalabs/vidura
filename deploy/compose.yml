@@ -1,0 +1,45 @@
+# Vidura v2 on the shared VPS. One container serves the API and the admin
+# portal; host nginx terminates TLS and proxies to the loopback port.
+#
+#   cd /opt/vidura-v2 && docker compose up -d --build
+#
+# .env (mode 600, never committed) holds the URLs, secret, owner emails,
+# Google OAuth client and the optional YouTube proxy; see backend/.env.example.
+name: vidura-v2
+
+services:
+  vidura:
+    build:
+      context: ./src
+      args:
+        VERSION: ${VIDURA_VERSION:-dev}
+    image: vidura-v2:${VIDURA_VERSION:-dev}
+    env_file: .env
+    environment:
+      VIDURA_ENV: production
+      VIDURA_ADDR: ":8080"
+      VIDURA_DATA_DIR: /data
+      VIDURA_TRUST_PROXY: "true"
+    ports:
+      - "127.0.0.1:18795:8080"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+      - /home/vidura:size=64m,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

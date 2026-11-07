@@ -1,0 +1,14 @@
+# The image only needs the Go backend and the two portals' sources.
+*
+!admin/
+!client/
+!backend/
+admin/node_modules
+admin/dist
+client/node_modules
+client/dist
+backend/bin
+backend/data
+backend/.env*
+backend/internal/webui/admin
+backend/internal/webui/client

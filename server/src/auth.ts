@@ -8,7 +8,15 @@ const cookieDomain = process.env.COOKIE_DOMAIN;
 
 export const auth = betterAuth({
   database: pgPool,
-  baseURL: env.apiBaseUrl,
+  // With extra hosts, the base URL follows the request's Host header, limited
+  // to these hosts (nginx sets Host; anything else falls back to API_BASE_URL).
+  baseURL: env.apiExtraHosts.length
+    ? {
+      allowedHosts: [new URL(env.apiBaseUrl).host, ...env.apiExtraHosts],
+      protocol: "https",
+      fallback: env.apiBaseUrl,
+    }
+    : env.apiBaseUrl,
   secret: env.authSecret,
   // Origins allowed to start auth flows and receive redirects.
   trustedOrigins: env.webOrigins,
