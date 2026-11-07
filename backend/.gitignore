@@ -1,6 +1,8 @@
-# Built admin portal, copied in before `go build`; only the placeholder is tracked.
+# Built portals, copied in before `go build`; only the placeholders are tracked.
 /internal/webui/admin/*
 !/internal/webui/admin/.gitkeep
+/internal/webui/client/*
+!/internal/webui/client/.gitkeep
 
 # Local data and binaries
 /data/
@@ -9,3 +11,7 @@
 *.db-shm
 *.db-wal
 .env
+.env.*
+!.env.example
+/vidura
+/vidura-agent

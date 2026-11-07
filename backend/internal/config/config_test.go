@@ -14,7 +14,9 @@ func env(values map[string]string) func(string) string {
 
 func validProduction() map[string]string {
 	return map[string]string{
-		"VIDURA_PUBLIC_URL":       "https://vidura.example.com/",
+		"VIDURA_API_URL":          "https://api-vidura.example.com/",
+		"VIDURA_ADMIN_URL":        "https://Admin-Vidura.example.com",
+		"VIDURA_CLIENT_URL":       "https://vidura.example.com",
 		"VIDURA_SECRET":           strings.Repeat("s", 32),
 		"VIDURA_SUPERUSER_EMAILS": " Owner@Example.com , second@example.com",
 		"GOOGLE_CLIENT_ID":        "client",
@@ -29,7 +31,13 @@ func TestLoadProductionDefaults(t *testing.T) {
 	assert.Equal(t, EnvProduction, cfg.Env)
 	assert.Equal(t, ":8790", cfg.Addr)
 	assert.Equal(t, "/data/vidura.db", cfg.DatabasePath())
-	assert.Equal(t, "https://vidura.example.com", cfg.Origin())
+	assert.Equal(t, "https://api-vidura.example.com", cfg.APIOrigin())
+	assert.Equal(t, "https://admin-vidura.example.com", cfg.AdminOrigin())
+	assert.Equal(t, "https://vidura.example.com", cfg.ClientOrigin())
+	assert.Equal(t, AppAdmin, cfg.AppForOrigin("https://admin-vidura.example.com"))
+	assert.Equal(t, AppClient, cfg.AppForOrigin("https://vidura.example.com"))
+	assert.Equal(t, "", cfg.AppForOrigin("https://api-vidura.example.com"))
+	assert.Equal(t, "", cfg.AppForOrigin("https://evil.example"))
 	assert.True(t, cfg.SecureCookies())
 	assert.True(t, cfg.GoogleEnabled())
 	assert.True(t, cfg.IsSuperuserEmail("owner@example.com"))
@@ -39,9 +47,14 @@ func TestLoadProductionDefaults(t *testing.T) {
 
 func TestLoadRejectsUnsafeProductionSettings(t *testing.T) {
 	cases := map[string]func(map[string]string){
-		"missing public url":  func(v map[string]string) { delete(v, "VIDURA_PUBLIC_URL") },
-		"http in production":  func(v map[string]string) { v["VIDURA_PUBLIC_URL"] = "http://vidura.example.com" },
-		"relative url":        func(v map[string]string) { v["VIDURA_PUBLIC_URL"] = "/vidura" },
+		"missing api url":     func(v map[string]string) { delete(v, "VIDURA_API_URL") },
+		"missing admin url":   func(v map[string]string) { delete(v, "VIDURA_ADMIN_URL") },
+		"missing client url":  func(v map[string]string) { delete(v, "VIDURA_CLIENT_URL") },
+		"http in production":  func(v map[string]string) { v["VIDURA_ADMIN_URL"] = "http://admin-vidura.example.com" },
+		"relative url":        func(v map[string]string) { v["VIDURA_API_URL"] = "/api" },
+		"url with a path":     func(v map[string]string) { v["VIDURA_ADMIN_URL"] = "https://example.com/admin" },
+		"shared host":         func(v map[string]string) { v["VIDURA_ADMIN_URL"] = "https://api-vidura.example.com" },
+		"different site":      func(v map[string]string) { v["VIDURA_ADMIN_URL"] = "https://admin.other.example" },
 		"short secret":        func(v map[string]string) { v["VIDURA_SECRET"] = "short" },
 		"no superusers":       func(v map[string]string) { delete(v, "VIDURA_SUPERUSER_EMAILS") },
 		"bad superuser":       func(v map[string]string) { v["VIDURA_SUPERUSER_EMAILS"] = "not-an-email" },
@@ -63,8 +76,11 @@ func TestLoadRejectsUnsafeProductionSettings(t *testing.T) {
 func TestLoadDevelopmentWithDevLogin(t *testing.T) {
 	values := validProduction()
 	values["VIDURA_ENV"] = EnvDevelopment
-	values["VIDURA_PUBLIC_URL"] = "http://localhost:5174"
+	values["VIDURA_API_URL"] = "http://api-vidura.prabhavalabs.localhost:8790"
+	values["VIDURA_ADMIN_URL"] = "http://admin-vidura.prabhavalabs.localhost:5174"
+	values["VIDURA_CLIENT_URL"] = "http://vidura.prabhavalabs.localhost:5173"
 	values["VIDURA_DEV_LOGIN"] = "true"
+	values["VIDURA_DEV_PASSWORD"] = "correct-horse-battery"
 	delete(values, "GOOGLE_CLIENT_ID")
 	delete(values, "GOOGLE_CLIENT_SECRET")
 
@@ -72,7 +88,27 @@ func TestLoadDevelopmentWithDevLogin(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.DevLogin)
 	assert.False(t, cfg.SecureCookies())
-	assert.Equal(t, "http://localhost:5174", cfg.Origin())
+	assert.Equal(t, "correct-horse-battery", cfg.DevPassword)
+	assert.Equal(t, "http://admin-vidura.prabhavalabs.localhost:5174", cfg.AdminOrigin())
+}
+
+func TestLoadDevLoginNeedsAPassword(t *testing.T) {
+	values := validProduction()
+	values["VIDURA_ENV"] = EnvDevelopment
+	values["VIDURA_DEV_LOGIN"] = "true"
+	values["VIDURA_DEV_PASSWORD"] = "short"
+
+	_, err := load(env(values))
+	assert.ErrorContains(t, err, "VIDURA_DEV_PASSWORD")
+}
+
+func TestLoadIgnoresDevPasswordWithoutDevLogin(t *testing.T) {
+	values := validProduction()
+	values["VIDURA_DEV_PASSWORD"] = "correct-horse-battery"
+
+	cfg, err := load(env(values))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.DevPassword)
 }
 
 func TestLoadDevelopmentNeedsASignInMethod(t *testing.T) {
@@ -83,4 +119,18 @@ func TestLoadDevelopmentNeedsASignInMethod(t *testing.T) {
 
 	_, err := load(env(values))
 	assert.ErrorContains(t, err, "no sign-in method")
+}
+
+func TestLoadProductionWithPasswordSignInOnly(t *testing.T) {
+	values := validProduction()
+	delete(values, "GOOGLE_CLIENT_ID")
+	delete(values, "GOOGLE_CLIENT_SECRET")
+	_, err := load(env(values))
+	assert.ErrorContains(t, err, "no sign-in method")
+
+	values["VIDURA_PASSWORD_LOGIN"] = "true"
+	cfg, err := load(env(values))
+	require.NoError(t, err)
+	assert.True(t, cfg.PasswordLogin)
+	assert.False(t, cfg.GoogleEnabled())
 }
