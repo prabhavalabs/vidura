@@ -1,8 +1,9 @@
 // Package webui embeds the built front-end apps into the binary.
 //
-// The admin portal's production build (admin/, `bun run build`) is copied
-// into ./admin before `go build`. In a fresh checkout the folder holds only a
-// placeholder, and /admin explains that the portal hasn't been built.
+// The portals' production builds (admin/ and client/, `bun run build`) are
+// copied into ./admin and ./client before `go build`. In a fresh checkout the
+// folders hold only a placeholder, and each host explains that its portal
+// hasn't been built.
 package webui
 
 import (
@@ -10,14 +11,19 @@ import (
 	"io/fs"
 )
 
-//go:embed all:admin
-var adminFiles embed.FS
+//go:embed all:admin all:client
+var files embed.FS
 
 // Admin returns the admin portal's files, rooted at its index.html.
-func Admin() fs.FS {
-	sub, err := fs.Sub(adminFiles, "admin")
+func Admin() fs.FS { return sub("admin") }
+
+// Client returns the client portal's files, rooted at its index.html.
+func Client() fs.FS { return sub("client") }
+
+func sub(dir string) fs.FS {
+	tree, err := fs.Sub(files, dir)
 	if err != nil {
 		panic(err) // the embed directive guarantees the directory exists
 	}
-	return sub
+	return tree
 }

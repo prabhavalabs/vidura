@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // Environment names.
@@ -20,10 +22,17 @@ const (
 
 // Config is the validated runtime configuration.
 type Config struct {
-	Env       string
-	Addr      string
-	DataDir   string
-	PublicURL *url.URL
+	Env     string
+	Addr    string
+	DataDir string
+
+	// The three public addresses. Each is scheme://host[:port] with no path,
+	// and each has its own host. The API serves /api and /auth; the admin and
+	// client portals call it cross-origin with credentials, so all three must
+	// share a registrable domain (the session cookie is SameSite=Lax).
+	APIURL    *url.URL
+	AdminURL  *url.URL
+	ClientURL *url.URL
 	// Secret signs short-lived OAuth state cookies. At least 32 bytes.
 	Secret []byte
 
@@ -34,13 +43,22 @@ type Config struct {
 	// or deleted from the admin portal, so the owner can't be locked out.
 	SuperuserEmails map[string]bool
 
-	// DevLogin enables POST /auth/dev-login, which signs in any allowed email
-	// without Google. Only permitted when Env is development.
-	DevLogin bool
+	// DevLogin lets an allowed email sign in with DevPassword (from the
+	// environment) at POST /auth/password. Only permitted when Env is
+	// development, and only with a password of at least 8 characters.
+	DevLogin    bool
+	DevPassword string
+
+	// PasswordLogin enables email and password sign-in at POST
+	// /auth/password for accounts given a password with `vidura
+	// set-password` (stored as an argon2id hash).
+	PasswordLogin bool
 
 	// TrustProxy makes the server read the client address from the
 	// X-Forwarded-For header set by the reverse proxy in front of it.
 	TrustProxy bool
+	// YouTubeProxy is passed to yt-dlp; YouTube blocks most datacenter IPs.
+	YouTubeProxy string
 }
 
 // DatabasePath is the SQLite file inside the data directory.
@@ -55,11 +73,41 @@ func (c *Config) GoogleEnabled() bool {
 }
 
 // SecureCookies reports whether cookies must carry the Secure attribute.
-func (c *Config) SecureCookies() bool { return c.PublicURL.Scheme == "https" }
+func (c *Config) SecureCookies() bool { return c.APIURL.Scheme == "https" }
 
-// Origin is the scheme://host[:port] of the public URL, compared against the
-// Origin header of state-changing requests.
-func (c *Config) Origin() string { return c.PublicURL.Scheme + "://" + c.PublicURL.Host }
+// APIOrigin, AdminOrigin and ClientOrigin are the scheme://host[:port] of
+// each public address, as browsers send them in the Origin header.
+func (c *Config) APIOrigin() string    { return origin(c.APIURL) }
+func (c *Config) AdminOrigin() string  { return origin(c.AdminURL) }
+func (c *Config) ClientOrigin() string { return origin(c.ClientURL) }
+
+// AppOrigin returns the origin of the named app ("admin" or "client").
+func (c *Config) AppOrigin(app string) string {
+	if app == AppAdmin {
+		return c.AdminOrigin()
+	}
+	return c.ClientOrigin()
+}
+
+// AppForOrigin maps a browser Origin header to the app it belongs to, or ""
+// when it is neither portal.
+func (c *Config) AppForOrigin(o string) string {
+	switch o {
+	case c.AdminOrigin():
+		return AppAdmin
+	case c.ClientOrigin():
+		return AppClient
+	}
+	return ""
+}
+
+// App names.
+const (
+	AppAdmin  = "admin"
+	AppClient = "client"
+)
+
+func origin(u *url.URL) string { return u.Scheme + "://" + u.Host }
 
 // IsSuperuserEmail reports whether email is a configured superuser.
 func (c *Config) IsSuperuserEmail(email string) bool {
@@ -88,7 +136,9 @@ func load(getenv func(string) string) (*Config, error) {
 		GoogleClientID:     get("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: get("GOOGLE_CLIENT_SECRET", ""),
 		DevLogin:           get("VIDURA_DEV_LOGIN", "false") == "true",
+		PasswordLogin:      get("VIDURA_PASSWORD_LOGIN", "false") == "true",
 		TrustProxy:         get("VIDURA_TRUST_PROXY", "false") == "true",
+		YouTubeProxy:       get("VIDURA_YOUTUBE_PROXY", ""),
 		SuperuserEmails:    map[string]bool{},
 	}
 
@@ -96,18 +146,28 @@ func load(getenv func(string) string) (*Config, error) {
 		problems = append(problems, fmt.Sprintf("VIDURA_ENV must be %q or %q", EnvProduction, EnvDevelopment))
 	}
 
-	rawURL := get("VIDURA_PUBLIC_URL", "")
-	if rawURL == "" {
-		problems = append(problems, "VIDURA_PUBLIC_URL is required (e.g. https://vidura.example.com)")
-	} else if parsed, err := url.Parse(rawURL); err != nil || parsed.Host == "" ||
-		(parsed.Scheme != "https" && parsed.Scheme != "http") {
-		problems = append(problems, "VIDURA_PUBLIC_URL must be an absolute http(s) URL")
-	} else {
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
-		cfg.PublicURL = parsed
-		if parsed.Scheme == "http" && cfg.Env == EnvProduction {
-			problems = append(problems, "VIDURA_PUBLIC_URL must use https in production")
+	parseURL := func(name, example string) *url.URL {
+		raw := get(name, "")
+		if raw == "" {
+			problems = append(problems, fmt.Sprintf("%s is required (e.g. %s)", name, example))
+			return nil
 		}
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") ||
+			strings.Trim(parsed.Path, "/") != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+			problems = append(problems, fmt.Sprintf("%s must be an absolute http(s) address with no path (e.g. %s)", name, example))
+			return nil
+		}
+		if parsed.Scheme == "http" && cfg.Env == EnvProduction {
+			problems = append(problems, fmt.Sprintf("%s must use https in production", name))
+		}
+		return &url.URL{Scheme: parsed.Scheme, Host: strings.ToLower(parsed.Host)}
+	}
+	cfg.APIURL = parseURL("VIDURA_API_URL", "https://api-vidura.prabhavalabs.com")
+	cfg.AdminURL = parseURL("VIDURA_ADMIN_URL", "https://admin-vidura.prabhavalabs.com")
+	cfg.ClientURL = parseURL("VIDURA_CLIENT_URL", "https://vidura.prabhavalabs.com")
+	if cfg.APIURL != nil && cfg.AdminURL != nil && cfg.ClientURL != nil {
+		problems = append(problems, checkSites(cfg.APIURL, cfg.AdminURL, cfg.ClientURL)...)
 	}
 
 	secret := get("VIDURA_SECRET", "")
@@ -137,15 +197,45 @@ func load(getenv func(string) string) (*Config, error) {
 	if cfg.DevLogin && cfg.Env != EnvDevelopment {
 		problems = append(problems, "VIDURA_DEV_LOGIN is only allowed when VIDURA_ENV=development")
 	}
-	if cfg.Env == EnvProduction && !cfg.GoogleEnabled() {
-		problems = append(problems, "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in production")
+	cfg.DevPassword = getenv("VIDURA_DEV_PASSWORD")
+	if cfg.DevLogin && len(cfg.DevPassword) < 8 {
+		problems = append(problems, "VIDURA_DEV_LOGIN needs VIDURA_DEV_PASSWORD of at least 8 characters")
 	}
-	if !cfg.GoogleEnabled() && !cfg.DevLogin {
-		problems = append(problems, "no sign-in method: configure Google or enable VIDURA_DEV_LOGIN in development")
+	if !cfg.DevLogin {
+		cfg.DevPassword = ""
+	}
+	if !cfg.GoogleEnabled() && !cfg.PasswordLogin && !cfg.DevLogin {
+		problems = append(problems, "no sign-in method: configure Google, set VIDURA_PASSWORD_LOGIN=true, or enable VIDURA_DEV_LOGIN in development")
 	}
 
 	if len(problems) > 0 {
 		return nil, errors.New("invalid configuration:\n  - " + strings.Join(problems, "\n  - "))
 	}
 	return cfg, nil
+}
+
+// checkSites makes sure the three addresses have distinct hosts, one scheme,
+// and one registrable domain, so the API's SameSite=Lax session cookie is
+// sent on the portals' cross-origin requests.
+func checkSites(api, admin, client *url.URL) []string {
+	var problems []string
+	if api.Host == admin.Host || api.Host == client.Host || admin.Host == client.Host {
+		problems = append(problems, "VIDURA_API_URL, VIDURA_ADMIN_URL and VIDURA_CLIENT_URL must each have their own host")
+	}
+	if api.Scheme != admin.Scheme || api.Scheme != client.Scheme {
+		problems = append(problems, "VIDURA_API_URL, VIDURA_ADMIN_URL and VIDURA_CLIENT_URL must use the same scheme")
+	}
+	site := func(u *url.URL) string {
+		domain, err := publicsuffix.EffectiveTLDPlusOne(u.Hostname())
+		if err != nil {
+			return u.Hostname()
+		}
+		return domain
+	}
+	if site(api) != site(admin) || site(api) != site(client) {
+		problems = append(problems, fmt.Sprintf(
+			"VIDURA_API_URL, VIDURA_ADMIN_URL and VIDURA_CLIENT_URL must share one registrable domain (got %s, %s, %s)",
+			site(api), site(admin), site(client)))
+	}
+	return problems
 }

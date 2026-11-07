@@ -16,14 +16,14 @@ import (
 
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	su := s.deps.Auth.RequireSuperuser
-	mux.HandleFunc("GET /admin/api/overview", su(s.adminOverview))
-	mux.HandleFunc("GET /admin/api/users", su(s.adminListUsers))
-	mux.HandleFunc("PATCH /admin/api/users/{id}", su(s.adminUpdateUser))
-	mux.HandleFunc("DELETE /admin/api/users/{id}", su(s.adminDeleteUser))
-	mux.HandleFunc("GET /admin/api/invites", su(s.adminListInvites))
-	mux.HandleFunc("POST /admin/api/invites", su(s.adminCreateInvite))
-	mux.HandleFunc("DELETE /admin/api/invites/{email}", su(s.adminDeleteInvite))
-	mux.HandleFunc("GET /admin/api/audit", su(s.adminAudit))
+	mux.HandleFunc("GET /api/admin/overview", su(s.adminOverview))
+	mux.HandleFunc("GET /api/admin/users", su(s.adminListUsers))
+	mux.HandleFunc("PATCH /api/admin/users/{id}", su(s.adminUpdateUser))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", su(s.adminDeleteUser))
+	mux.HandleFunc("GET /api/admin/invites", su(s.adminListInvites))
+	mux.HandleFunc("POST /api/admin/invites", su(s.adminCreateInvite))
+	mux.HandleFunc("DELETE /api/admin/invites/{email}", su(s.adminDeleteInvite))
+	mux.HandleFunc("GET /api/admin/audit", su(s.adminAudit))
 }
 
 func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +156,24 @@ func (s *Server) adminDeleteInvite(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	limit, _ := strconv.Atoi(query.Get("limit"))
-	page, err := s.deps.Audit.List(r.Context(), limit, query.Get("cursor"), query.Get("action"))
+	var (
+		page audit.Page
+		err  error
+	)
+	if raw := query.Get("page"); raw != "" {
+		number, _ := strconv.Atoi(raw)
+		size, _ := strconv.Atoi(query.Get("pageSize"))
+		var actions []string
+		for _, action := range strings.Split(query.Get("action"), ",") {
+			if action = strings.TrimSpace(action); action != "" && len(actions) < 30 {
+				actions = append(actions, action)
+			}
+		}
+		page, err = s.deps.Audit.ListPage(r.Context(), number, size, actions)
+	} else {
+		limit, _ := strconv.Atoi(query.Get("limit"))
+		page, err = s.deps.Audit.List(r.Context(), limit, query.Get("cursor"), query.Get("action"))
+	}
 	if err != nil {
 		serverError(w, "list audit log", err)
 		return
@@ -179,7 +195,7 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 	if page.NextCursor != "" {
 		next = page.NextCursor
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries, "nextCursor": next})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries, "nextCursor": next, "total": page.Total})
 }
 
 func publicInvite(invite accounts.Invite) map[string]any {
