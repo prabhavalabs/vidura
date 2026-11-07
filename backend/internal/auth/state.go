@@ -19,6 +19,7 @@ type flowState struct {
 	State    string `json:"s"`
 	Verifier string `json:"v"`
 	Nonce    string `json:"n"`
+	App      string `json:"a"`
 	Next     string `json:"r"`
 	Expires  int64  `json:"e"`
 }
@@ -27,11 +28,15 @@ const flowStateTTL = 10 * time.Minute
 
 var errBadState = errors.New("sign-in state is missing, expired or tampered with")
 
-func newFlowState(next string, now time.Time) (flowState, error) {
-	state, err := randomString(32)
+// newFlowState starts a sign-in for app. The OAuth state parameter is
+// prefixed with the app name so a callback that lost its cookie can still
+// send the browser to the right sign-in page.
+func newFlowState(app, next string, now time.Time) (flowState, error) {
+	random, err := randomString(32)
 	if err != nil {
 		return flowState{}, err
 	}
+	state := app + "." + random
 	verifier, err := randomString(48)
 	if err != nil {
 		return flowState{}, err
@@ -40,7 +45,7 @@ func newFlowState(next string, now time.Time) (flowState, error) {
 	if err != nil {
 		return flowState{}, err
 	}
-	return flowState{State: state, Verifier: verifier, Nonce: nonce, Next: next, Expires: now.Add(flowStateTTL).Unix()}, nil
+	return flowState{State: state, Verifier: verifier, Nonce: nonce, App: app, Next: next, Expires: now.Add(flowStateTTL).Unix()}, nil
 }
 
 func signFlowState(secret []byte, state flowState) (string, error) {
