@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS push_subscriptions;
+DROP TABLE IF EXISTS translation_settings;
+DROP TABLE IF EXISTS chat_settings;
+DROP TABLE IF EXISTS video_notes;
+DROP TABLE IF EXISTS chat_messages;
+DROP TABLE IF EXISTS chat_threads;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS translated_segments;
+DROP TABLE IF EXISTS transcript_segments;
+DROP TABLE IF EXISTS videos;
