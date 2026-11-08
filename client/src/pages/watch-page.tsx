@@ -13,6 +13,7 @@ import { cn } from "cn"
 import { Link, useParams, useSearchParams } from "react-router"
 import { toast } from "sonner"
 
+import { BusyIcon } from "@/components/busy-icon"
 import { VideoChat } from "@/components/chat/video-chat"
 import { LearnPanel } from "@/components/learn/learn-panel"
 import { Player, type PlayerHandle } from "@/components/player"
@@ -43,7 +44,13 @@ import { ApiError, errorMessage } from "@/lib/api"
 import { ago, clock } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import { usePrefs } from "@/lib/prefs"
-import { isProcessing, useRequestRun, useVideo } from "@/lib/queries"
+import {
+  isProcessing,
+  useLearnBusy,
+  useRequestRun,
+  useVideo,
+  useVideoChatBusy,
+} from "@/lib/queries"
 import { lineAt } from "@/lib/segments"
 import type { Segment, Video } from "@/lib/types"
 
@@ -184,12 +191,14 @@ function Watching({ video, segments }: { video: Video; segments: Segment[] }) {
   // Room under the video for the title row, plus the subtitle strip when
   // subtitles sit below the picture instead of over it.
   const below = prefs.captions && prefs.placement === "below"
-  const style = { "--meta": below ? "10.75rem" : "5.75rem" } as React.CSSProperties
+  const style = {
+    "--meta": below ? "10.75rem" : "5.75rem",
+  } as React.CSSProperties
 
   return (
     <div
       // Phones: edge to edge (main has 1rem padding on each side and top).
-      className="relative -mx-4 -mt-4 flex min-h-0 flex-1 flex-col [container-type:size] sm:mx-0 sm:mt-0"
+      className="[container-type:size] relative -mx-4 -mt-4 flex min-h-0 flex-1 flex-col sm:mx-0 sm:mt-0"
       style={style}
     >
       <ScrollArea
@@ -352,6 +361,8 @@ function SidePanel({
     setOpened((seen) => (seen.has(next) ? seen : new Set(seen).add(next)))
   }
   const processing = isProcessing(video)
+  const learnBusy = Object.values(useLearnBusy(video.id)).some(Boolean)
+  const askBusy = useVideoChatBusy(video.id)
   const untranslated = segments.some((segment) => !segment.translation)
 
   return (
@@ -383,11 +394,15 @@ function SidePanel({
           {t.tabs.transcript}
         </TabsTrigger>
         <TabsTrigger value="learn">
-          <GraduationCapIcon />
+          <BusyIcon busy={learnBusy}>
+            <GraduationCapIcon />
+          </BusyIcon>
           {t.tabs.learn}
         </TabsTrigger>
         <TabsTrigger value="ask">
-          <MessageCircleQuestionIcon />
+          <BusyIcon busy={askBusy}>
+            <MessageCircleQuestionIcon />
+          </BusyIcon>
           {t.tabs.ask}
         </TabsTrigger>
       </TabsList>

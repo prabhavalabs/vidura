@@ -3,6 +3,7 @@ import {
   QueryClient,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
@@ -202,17 +203,80 @@ export const learnKeys = {
   chat: (id: string) => ["chats", id] as const,
 }
 
-/** Study notes; polled while they're being made. */
-export function useInsight<T>(id: string, kind: InsightKind, locale: string) {
-  return useQuery({
+function insightQuery<T>(id: string, kind: InsightKind, locale: string) {
+  return {
     queryKey: learnKeys.insight(id, kind, locale),
     queryFn: () =>
       api.get<Insight<T>>(
         `/api/videos/${id}/insights/${kind}?locale=${locale}`
       ),
-    refetchInterval: (query) =>
+    refetchInterval: (query: { state: { data?: Insight<T> } }) =>
       query.state.data?.status === "pending" ? 3_000 : false,
+  }
+}
+
+/** Study notes; polled while they're being made. */
+export function useInsight<T>(id: string, kind: InsightKind, locale: string) {
+  return useQuery(insightQuery<T>(id, kind, locale))
+}
+
+const INSIGHT_KINDS: InsightKind[] = ["summary", "flashcards", "quiz"]
+const STUDY_LOCALES = ["si", "en"]
+
+export type LearnTool = InsightKind | "pictures"
+
+/**
+ * Which learning tools are still being made for a video, so their tabs can
+ * show it while another tab is open. It only reads what's already known and
+ * keeps polling just the ones in progress; it never fetches on its own.
+ */
+export function useLearnBusy(id: string): Record<LearnTool, boolean> {
+  const insights = useQueries({
+    queries: INSIGHT_KINDS.flatMap((kind) =>
+      STUDY_LOCALES.map((locale) => ({
+        ...insightQuery(id, kind, locale),
+        enabled: (query: { state: { data?: Insight } }) =>
+          query.state.data?.status === "pending",
+      }))
+    ),
   })
+  const pictures = useQuery({
+    queryKey: learnKeys.pictures(id),
+    queryFn: () =>
+      api
+        .get<{ pictures: Picture[] }>(`/api/videos/${id}/pictures`)
+        .then((r) => r.pictures),
+    enabled: (query) =>
+      query.state.data?.some((p) => p.status === "pending") ?? false,
+    refetchInterval: (query) =>
+      query.state.data?.some((p) => p.status === "pending") ? 4_000 : false,
+  })
+  const busy = (kind: InsightKind) =>
+    insights.some(
+      (result, i) =>
+        INSIGHT_KINDS[Math.floor(i / STUDY_LOCALES.length)] === kind &&
+        result.data?.status === "pending"
+    )
+  return {
+    summary: busy("summary"),
+    flashcards: busy("flashcards"),
+    quiz: busy("quiz"),
+    pictures: pictures.data?.some((p) => p.status === "pending") ?? false,
+  }
+}
+
+/** Whether an answer about this video is still being written. Reads only
+ * what the Ask tab already loaded. */
+export function useVideoChatBusy(id: string) {
+  const chat = useQuery({
+    queryKey: learnKeys.videoChat(id),
+    queryFn: () =>
+      api.get<{ thread: Thread | null; messages: ChatMessage[] }>(
+        `/api/videos/${id}/chat`
+      ),
+    enabled: false,
+  })
+  return chat.data?.messages.some((m) => m.status === "streaming") ?? false
 }
 
 export function useMakeInsight(id: string, kind: InsightKind, locale: string) {
