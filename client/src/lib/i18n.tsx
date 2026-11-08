@@ -212,7 +212,12 @@ const en = {
     account: "Account",
     signedInAs: (email: string) => `Signed in with Google as ${email}.`,
   },
-  tabs: { transcript: "Transcript", learn: "Learn", ask: "Ask" },
+  tabs: {
+    transcript: "Transcript",
+    learn: "Learn",
+    ask: "Ask",
+    busy: "still being made",
+  },
   learn: {
     title: "Learn from this video",
     language: "Study language",
@@ -600,7 +605,12 @@ const si: Messages = {
     account: "ගිණුම",
     signedInAs: (email) => `${email} ලෙස Google සමඟ ඇතුළු වී ඇත.`,
   },
-  tabs: { transcript: "පිටපත", learn: "ඉගෙන ගන්න", ask: "අසන්න" },
+  tabs: {
+    transcript: "පිටපත",
+    learn: "ඉගෙන ගන්න",
+    ask: "අසන්න",
+    busy: "තවමත් සාදමින්",
+  },
   learn: {
     title: "මෙම වීඩියෝවෙන් ඉගෙන ගන්න",
     language: "ඉගෙනුම් භාෂාව",
@@ -775,8 +785,7 @@ const si: Messages = {
     subtitle:
       "YouTube සබැඳියක් අලවන්න. YouTube යෙදුමෙන් Vidura වෙත වීඩියෝවක් බෙදාගැනීමටද හැක.",
     adding: "බෙදාගත් වීඩියෝව එක් කරමින්…",
-    noLink:
-      "බෙදාගත් දෙයෙහි YouTube සබැඳියක් නොතිබුණි. පහතින් එකක් අලවන්න.",
+    noLink: "බෙදාගත් දෙයෙහි YouTube සබැඳියක් නොතිබුණි. පහතින් එකක් අලවන්න.",
   },
 }
 

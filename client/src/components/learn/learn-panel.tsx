@@ -6,6 +6,7 @@ import {
   ListChecksIcon,
 } from "lucide-react"
 
+import { BusyIcon } from "@/components/busy-icon"
 import { FlashcardsView } from "@/components/learn/flashcards-view"
 import { PicturesView } from "@/components/learn/pictures-view"
 import { QuizView } from "@/components/learn/quiz-view"
@@ -14,6 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useLocale } from "@/lib/i18n"
+import { useLearnBusy } from "@/lib/queries"
 
 /** Study notes, flashcards, a quiz and pictures for one video. */
 export function LearnPanel({
@@ -26,13 +28,14 @@ export function LearnPanel({
   const { t, locale: uiLocale } = useLocale()
   const [locale, setLocale] = React.useState<string>(uiLocale)
   const [tool, setTool] = React.useState("summary")
+  const busy = useLearnBusy(videoId)
 
   const tools = [
     { value: "summary", label: t.learn.summary, icon: BookOpenTextIcon },
     { value: "flashcards", label: t.learn.flashcards, icon: LayersIcon },
     { value: "quiz", label: t.learn.quiz, icon: ListChecksIcon },
     { value: "pictures", label: t.learn.pictures, icon: ImageIcon },
-  ]
+  ] as const
 
   return (
     <Tabs
@@ -48,10 +51,14 @@ export function LearnPanel({
             <TabsTrigger
               key={item.value}
               value={item.value}
-              aria-label={item.label}
+              aria-label={
+                busy[item.value] ? `${item.label}, ${t.tabs.busy}` : item.label
+              }
               title={item.label}
             >
-              <item.icon />
+              <BusyIcon busy={busy[item.value]}>
+                <item.icon />
+              </BusyIcon>
               <span className="hidden truncate @md/learn:inline">
                 {item.label}
               </span>
