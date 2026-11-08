@@ -42,6 +42,9 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-selected: var(--selected);
+  --color-selected-foreground: var(--selected-foreground);
+  --color-selected-border: var(--selected-border);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -81,6 +84,10 @@
   --warning: oklch(0.72 0.16 75);
   --info: oklch(0.58 0.15 280);
   --dot: oklch(0.88 0 0);
+  /* The chosen tab or toggle: a see-through green. */
+  --selected: oklch(0.72 0.17 150 / 14%);
+  --selected-foreground: oklch(0.44 0.13 150);
+  --selected-border: oklch(0.62 0.16 150 / 45%);
   --chart-1: var(--success);
   --chart-2: var(--failure);
   --chart-3: var(--warning);
@@ -123,6 +130,9 @@
   --warning: oklch(0.86 0.16 92);
   --info: oklch(0.74 0.12 280);
   --dot: oklch(0.3 0 0);
+  --selected: oklch(0.75 0.17 150 / 17%);
+  --selected-foreground: oklch(0.87 0.15 150);
+  --selected-border: oklch(0.75 0.17 150 / 45%);
   --chart-1: var(--success);
   --chart-2: var(--failure);
   --chart-3: var(--warning);
